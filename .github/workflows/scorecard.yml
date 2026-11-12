@@ -1,0 +1,94 @@
+# The scorecard (C-17; ADR-0024 §12).
+#
+# Why it exists: the class's track record (the streak and its resets,
+# escapes by type, near-misses, seeds caught and missed, shadow verdicts,
+# inconclusives by reason, review minutes, attribution precision, recall,
+# delay and unknowns, usage per pull request) must be kept by the machinery,
+# with every field traced to an API read or to one of six human-entered
+# fields declared before the run. factory/scorecard.py reads once, computes a
+# pure function of what it read, and writes three files to the records
+# branch: scorecard/go-module-bump.json, .md, and .inputs.json (the reads
+# themselves, so anyone can recompute the JSON byte for byte with
+# `python3 -m factory.scorecard --snapshot`). Rows for pull requests that are
+# still open are withheld until they close or merge.
+#
+# At the 20th clean merge it also writes a promotion record to a branch here
+# and opens an issue; a person takes it from there (ADR-0024 §8).
+#
+# When it runs: once a day, by hand, and called by the agent's workflow after
+# each merge and once after the latest merge's escape window closes
+# (`uses: ./.github/workflows/scorecard.yml`; the caller's job must grant the
+# three permissions below).
+#
+# Tokens: only this workflow's own GITHUB_TOKEN. svc-hello is public, so its
+# pull requests, events, reviews, check runs and workflow runs are read with
+# it; neither App's key is used here.
+name: scorecard
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  # Until the class file is there and filled (main is pushed without it; its
+  # first commit is the filled one), the scheduled run stops here, green,
+  # with one notice line: no App token is minted, no environment entered,
+  # nothing written (factory/guard.py). Every other job needs this one.
+  guard:
+    name: guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read    # this repository's class file
+    outputs:
+      ready: ${{ steps.guard.outputs.ready }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: is the class file filled?
+        id: guard
+        run: python3 -m factory.guard
+
+  scorecard:
+    name: scorecard
+    needs: guard
+    if: needs.guard.outputs.ready == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # Runs never overlap, so the scorecard files and the promotion branch have
+    # one writer at a time.
+    concurrency:
+      group: scorecard
+      cancel-in-progress: false
+    permissions:
+      contents: write   # the records branch, and the promotion record's branch
+      issues: write     # the promotion issue
+      actions: read     # this repository's agent runs and their jobs (minutes per pull request)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Python is new enough and YAML is readable
+        run: |
+          python3 -c 'import sys; assert sys.version_info >= (3, 11), sys.version'
+          python3 -c 'import yaml' 2>/dev/null || command -v yq
+
+      - name: scorecard
+        env:
+          CONTROLS_TOKEN: ${{ github.token }}
+          SVC_TOKEN: ${{ github.token }}
+        run: python3 -m factory.scorecard --out "$RUNNER_TEMP/scorecard"
+
+      - name: upload the scorecard files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scorecard
+          path: ${{ runner.temp }}/scorecard
+          if-no-files-found: error

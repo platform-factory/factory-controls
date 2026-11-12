@@ -1,0 +1,182 @@
+# The fixtures (C-15, C-20, C-21): one listed attempt per run, made with the
+# agent App's own token, recorded as GitHub answered it.
+#
+# Why it exists: C-15 and C-21 are graded on what GitHub did with each attempt
+# the readiness note lists, and C-20 on whether the agent App's labels change a
+# verdict. factory/fixtures.py makes one attempt, records the HTTP status and
+# body beside the expected result, and writes fixtures/<id>.json to the
+# records branch. Each case says what restores the state if a refusal
+# unexpectedly succeeds; then this run fails, an issue is opened here, and the
+# run of the programme stops until a person restores and records it.
+#
+# How to run one: disable the agent's workflow first (the fixture refuses
+# otherwise), then dispatch with the case and, where the case needs it, a pull
+# request number or a comment id. docs/RUNBOOK.md and docs/FIXTURES.md give
+# when each case runs and what it needs. C-21's attempts from inside the
+# model's job are not here: they run as the step `c21 attempts` of that job in
+# agent.yml (`agenttool c21`, when agent.yml is dispatched with
+# `c21_model_job: true`), and agent.yml's `c21-record` job writes their record.
+name: fixtures
+
+on:
+  workflow_dispatch:
+    inputs:
+      case:
+        description: "The one attempt to make"
+        required: true
+        type: choice
+        options:
+          - c15-readme
+          - c15-nested-gomod
+          - c15-push-onto-person-pr
+          - c15-replace
+          - c15-go-directive
+          - c15-unforced-module
+          - c15-downgrade
+          - c15-wrong-target
+          - c15-pseudo-version
+          - c15-gosum-hash
+          - c15-replace-via-branch
+          - c20-apply-human-cleared
+          - c20-apply-unrelated-label
+          - c20-remove-needs-human
+          - c21-push-main
+          - c21-workflow-push
+          - c21-workflow-contents-api
+          - c21-approve-own-pr
+          - c21-approve-other-pr
+          - c21-ruleset-put
+          - c21-write-platform-config
+          - c21-write-controls
+          - c21-write-dotgithub
+          - c21-write-platform-knowledge
+          - c21-read-controls-secrets
+          - c21-set-force-variable
+          - c21-check-run
+          - c21-commit-status
+          - c21-push-after-approval
+          - c21-remove-human-cleared
+          - c21-remove-escape-revert
+          - c21-delete-label-definition
+          - c21-apply-seeded
+          - c21-edit-packet-comment
+          - c21-delete-packet-comment
+      pr:
+        description: "Pull request number, for the cases that act on one"
+        required: false
+        type: string
+        default: ""
+      comment_id:
+        description: "Comment id, for the packet-link comment cases (optional: found on the pull request by author and marker)"
+        required: false
+        type: string
+        default: ""
+      phase:
+        description: "c21-push-after-approval only: open, then push after the listed human approves"
+        required: false
+        type: choice
+        default: none
+        options:
+          - none
+          - open
+          - push
+
+permissions: {}
+
+# One fixture at a time.
+concurrency:
+  group: fixtures
+  cancel-in-progress: false
+
+jobs:
+  # Until the class file is there and filled, the run stops here, green,
+  # with one notice line: no App token is minted, no environment entered,
+  # nothing written (factory/guard.py). Every other job needs this one.
+  guard:
+    name: guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read    # this repository's class file
+    outputs:
+      ready: ${{ steps.guard.outputs.ready }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: is the class file filled?
+        id: guard
+        run: python3 -m factory.guard
+
+  fixture:
+    name: fixture
+    needs: guard
+    if: needs.guard.outputs.ready == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: agent-app
+    permissions:
+      contents: write   # the records branch: fixtures/<id>.json
+      issues: write     # an issue here when a refusal unexpectedly succeeds
+      actions: read     # agent.yml's state, which must be disabled_manually
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The agent App's token, scoped to svc-hello explicitly (from another
+      # repository the action's default scope is the current one). No
+      # permission-* input: the token carries exactly the installation's
+      # permissions, which are what C-21 tests.
+      - name: agent App token for svc-hello
+        id: agent
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+          owner: platform-factory
+          repositories: svc-hello
+
+      # C-21's "not installed" cases: try to mint a token for the target
+      # repository. It must fail; if it succeeds the App is installed there,
+      # the fixture records that as unexpected, and the token is never used
+      # (the action revokes it at the end of the job).
+      - name: install probe for the target repository
+        id: probe
+        if: startsWith(inputs.case, 'c21-write-')
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+          owner: platform-factory
+          repositories: ${{ inputs.case == 'c21-write-platform-config' && 'platform-config' || inputs.case == 'c21-write-controls' && 'factory-controls' || inputs.case == 'c21-write-dotgithub' && '.github' || 'platform-knowledge' }}
+
+      - name: Python is new enough and YAML is readable
+        run: |
+          python3 -c 'import sys; assert sys.version_info >= (3, 11), sys.version'
+          python3 -c 'import yaml' 2>/dev/null || command -v yq
+
+      # Inputs reach the script through the environment, never pasted into the
+      # command line.
+      - name: fixture
+        id: fixture
+        env:
+          SVC_TOKEN: ${{ steps.agent.outputs.token }}
+          CONTROLS_TOKEN: ${{ github.token }}
+          READ_TOKEN: ${{ github.token }}
+          INSTALL_PROBE_OUTCOME: ${{ steps.probe.outcome }}
+          FIXTURE_CASE: ${{ inputs.case }}
+          FIXTURE_PR: ${{ inputs.pr }}
+          FIXTURE_COMMENT_ID: ${{ inputs.comment_id }}
+          FIXTURE_PHASE: ${{ inputs.phase != 'none' && inputs.phase || '' }}
+        run: python3 -m factory.fixtures --case "$FIXTURE_CASE"
+
+      # The run is green only when GitHub answered as the note expects.
+      - name: outcome
+        env:
+          OUTCOME: ${{ steps.fixture.outputs.outcome }}
+        run: |
+          echo "fixture outcome: ${OUTCOME:-none}"
+          test "$OUTCOME" = "as-expected"

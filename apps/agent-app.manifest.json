@@ -1,0 +1,17 @@
+{
+  "name": "platform-factory-agent",
+  "url": "https://github.com/platform-factory/factory-controls",
+  "description": "M4's non-human author for the Go-module bump class on svc-hello (ADR-0024 §7). Opens and merges pull requests; GitHub's ruleset decides. No workflows, administration, checks, statuses or issues permission; no webhook.",
+  "public": false,
+  "hook_attributes": {
+    "url": "https://example.invalid/no-webhook",
+    "active": false
+  },
+  "redirect_url": "https://github.com/platform-factory/factory-controls/blob/main/apps/README.md",
+  "default_permissions": {
+    "contents": "write",
+    "pull_requests": "write",
+    "metadata": "read"
+  },
+  "default_events": []
+}

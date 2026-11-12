@@ -1,0 +1,95 @@
+# The escape detector (ADR-0024 §9 and §10).
+#
+# Why it runs on a schedule: an escape must return the class to L1 without
+# anyone noticing it first. Every ten minutes this job reads svc-hello's
+# workflow runs and their attempts, pull requests, label events and ruleset,
+# matches escape types (a) and (b), compares the live ruleset with the
+# committed L1 JSON, and has the ratchet raise the rung entry to 1 on any
+# event. Scheduled runs can be delayed or dropped, so the agent workflow's
+# pre-merge job runs the same checks before every merge and refuses while
+# this job's last complete run (detector/heartbeat.json on the records
+# branch) is older than 30 minutes.
+#
+# The ratchet App's key lives in the `ratchet` environment, which only this
+# job and the agent workflow's pre-merge job use. No svc-hello code can reach
+# this repository.
+name: detector
+
+on:
+  schedule:
+    # Minutes 4, 14, ..., 54 (the class file's schedules.detector_minutes),
+    # off the top of the hour, where scheduled runs are most often delayed.
+    - cron: "4,14,24,34,44,54 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  # Until the class file is there and filled (main is pushed without it; its
+  # first commit is the filled one), the scheduled run stops here, green,
+  # with one notice line: no App token is minted, no environment entered,
+  # nothing written (factory/guard.py). Every other job needs this one.
+  guard:
+    name: guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read    # this repository's class file
+    outputs:
+      ready: ${{ steps.guard.outputs.ready }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: is the class file filled?
+        id: guard
+        run: python3 -m factory.guard
+
+  detect:
+    name: detect
+    needs: guard
+    if: needs.guard.outputs.ready == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: ratchet
+    # One ruleset writer at a time: the agent workflow's pre-merge job uses
+    # the same group, so a run in progress is never interrupted mid-write.
+    # GitHub keeps at most one pending job per group: a newer pending one
+    # cancels an older pending one (a lost heartbeat or a skipped agent run;
+    # both fail safe). actionlint 1.7.12 rejects `queue: max`, which would
+    # keep both.
+    concurrency:
+      group: ratchet
+      cancel-in-progress: false
+    permissions:
+      contents: write   # the records branch: heartbeat, ledger, ratchet before/after
+      issues: write     # an issue here when the ratchet refuses or a ruleset difference stands
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Scoped to svc-hello explicitly: from another repository the action's
+      # default scope is the current repository, where the App is not
+      # installed. No permission-* input, so the token carries exactly the
+      # installation's permissions.
+      - name: ratchet App token for svc-hello
+        id: ratchet
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RATCHET_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RATCHET_APP_PRIVATE_KEY }}
+          owner: platform-factory
+          repositories: svc-hello
+
+      - name: Python is new enough and YAML is readable
+        run: |
+          python3 -c 'import sys; assert sys.version_info >= (3, 11), sys.version'
+          python3 -c 'import yaml' 2>/dev/null || command -v yq
+
+      - name: detector
+        env:
+          SVC_TOKEN: ${{ steps.ratchet.outputs.token }}
+          CONTROLS_TOKEN: ${{ github.token }}
+        run: python3 -m factory.detector

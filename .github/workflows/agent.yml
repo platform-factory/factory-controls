@@ -1,0 +1,452 @@
+# The agent's workflow (ADR-0024 §7), twice an hour.
+#
+# Why it is built this way: the class's writer is an LLM agent, and the
+# boundary must not depend on it behaving. So the model holds no GitHub
+# credential at all, and every job that does hold one runs code from this
+# repository, which no svc-hello code can write. Each run, in order:
+#
+#   guard      (no secret, read only)    stops the run, green, while there is no
+#                                        class file or it holds a placeholder.
+#   pre-merge  (environment `ratchet`)   the detector's checks; demotes first on
+#                                        an unhandled escape; reports ok or not.
+#   merge      (environment `agent-app`) merges, closes or waits on the one open
+#                                        agent pull request; then settles a seed
+#                                        whose review decision is recorded.
+#   prepare    (no secret)               only if no agent pull request is open:
+#                                        the next queue item, its release age,
+#                                        and the model's workspace.
+#   agent      (environment `agent-model`, `permissions: {}`)
+#                                        only if the item is old enough: Claude
+#                                        Code headless in the pinned builder
+#                                        image; out come go.mod, go.sum and
+#                                        summary.md, the summary padded to one
+#                                        size and encrypted to the open job's
+#                                        key before the artifact is uploaded.
+#   open       (environment `agent-app`) takes exactly those three files,
+#                                        decrypts the summary, commits through
+#                                        GraphQL as the agent App, opens the
+#                                        pull request, writes the run record.
+#   scorecard  (reusable scorecard.yml)  after a merge, and once more on the
+#                                        first run after the latest merge's
+#                                        escape window closes (C-17: "on each
+#                                        merge").
+#   c21-record (dispatch input only)     writes the record of C-21's attempts
+#                                        from inside the model's job.
+#
+# Runs never overlap (the workflow-level concurrency group), and pre-merge
+# shares the `ratchet` group with detector.yml, so only one ruleset writer
+# runs at a time. GitHub keeps at most one pending run or job per group and
+# cancels an older pending one when a newer one queues (actionlint 1.7.12
+# does not accept the `queue: max` key that would change this). So when a
+# detector run is in progress, a pre-merge job pending and the next detector
+# run queued, the pending pre-merge is cancelled: that agent run merges
+# nothing and opens nothing (merge needs pre-merge), and the next run, half
+# an hour later, does. Or the reverse, and one heartbeat is lost. Both fail
+# safe; neither is retried here.
+#
+# Seeds: a seed takes exactly this path too. Nothing in these logs differs
+# between a seed and a real item until the reviewer has decided (see
+# factory/open_pr.py and factory/merge_step.py).
+name: agent
+
+on:
+  schedule:
+    # Minutes 23 and 53 (the class file's schedules.agent_minutes), off the
+    # top of the hour and between detector runs.
+    - cron: "23,53 * * * *"
+  workflow_dispatch:
+    inputs:
+      c21_model_job:
+        description: "C-21: also make the three attempts from inside the model's job (step `c21 attempts`)"
+        required: false
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: agent
+  cancel-in-progress: false
+
+jobs:
+  # Until the class file is there and filled (main is pushed without it; its
+  # first commit is the filled one), the scheduled run stops here, green,
+  # with one notice line: no App token is minted, no environment entered,
+  # nothing written (factory/guard.py). Every other job needs this one.
+  guard:
+    name: guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read    # this repository's class file
+    outputs:
+      ready: ${{ steps.guard.outputs.ready }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: is the class file filled?
+        id: guard
+        run: python3 -m factory.guard
+
+  pre-merge:
+    name: pre-merge
+    needs: guard
+    if: needs.guard.outputs.ready == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: ratchet
+    concurrency:
+      group: ratchet
+      cancel-in-progress: false
+    permissions:
+      contents: write   # the records branch: ledger, ratchet before/after, merge-step record
+      issues: write     # an issue here when the ratchet refuses or a ruleset difference stands
+    outputs:
+      ok: ${{ steps.pre.outputs.ok }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Scoped to svc-hello explicitly: from another repository the action's
+      # default scope is the current repository, where no App is installed.
+      - name: ratchet App token for svc-hello
+        id: ratchet
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RATCHET_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RATCHET_APP_PRIVATE_KEY }}
+          owner: platform-factory
+          repositories: svc-hello
+
+      - name: pre-merge
+        id: pre
+        env:
+          SVC_TOKEN: ${{ steps.ratchet.outputs.token }}
+          CONTROLS_TOKEN: ${{ github.token }}
+        run: python3 -m factory.merge_step --phase pre-merge
+
+  merge:
+    name: merge
+    needs: pre-merge
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: agent-app
+    permissions:
+      contents: write   # the records branch: merge-step record, seed records
+    outputs:
+      action: ${{ steps.merge.outputs.action }}
+      scorecard_due: ${{ steps.merge.outputs.scorecard_due }}
+      # "false" only when this job ran to the end and no agent pull request
+      # is open: none was, or the merge or close just ended it, or the seed
+      # settlement just closed it. Anything else reads as open, so a failed
+      # step never starts a second agent pull request.
+      agent_pr_open: ${{ (steps.merge.outputs.agent_pr_open == 'false' || steps.settle.outputs.closed_open_pr == 'true') && steps.settle.outcome == 'success' && 'false' || 'true' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: agent App token for svc-hello
+        id: agent-app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+          owner: platform-factory
+          repositories: svc-hello
+
+      - name: merge
+        id: merge
+        env:
+          SVC_TOKEN: ${{ steps.agent-app.outputs.token }}
+          CONTROLS_TOKEN: ${{ github.token }}
+          SEED_KEY: ${{ secrets.SEED_KEY }}
+          PRE_MERGE_OK: ${{ needs.pre-merge.outputs.ok }}
+        run: python3 -m factory.merge_step --phase merge
+
+      # Writes seeds/<pr>.json for a seed whose review decision is recorded,
+      # then labels it `seeded` and closes it. It runs before `prepare`
+      # chooses the next item, because until that record exists a closed seed
+      # reads as a near-miss and its queue item would be skipped.
+      - name: settle seeds
+        id: settle
+        if: steps.merge.outcome == 'success'
+        env:
+          SVC_TOKEN: ${{ steps.agent-app.outputs.token }}
+          CONTROLS_TOKEN: ${{ github.token }}
+          SEED_KEY: ${{ secrets.SEED_KEY }}
+        run: python3 -m factory.open_pr --settle-seeds
+
+  prepare:
+    name: prepare
+    needs: merge
+    if: needs.merge.outputs.agent_pr_open == 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read    # this repository's code; svc-hello and the records branch are public reads
+    outputs:
+      ready: ${{ steps.prepare.outputs.ready }}
+      prepared: ${{ steps.prepare.outputs.prepared }}
+      builder_image: ${{ steps.prepare.outputs.builder_image }}
+      model: ${{ steps.prepare.outputs.model }}
+      harness_version: ${{ steps.prepare.outputs.harness_version }}
+      harness_platform: ${{ steps.prepare.outputs.harness_platform }}
+      harness_sha256: ${{ steps.prepare.outputs.harness_sha256 }}
+      skill_sha256: ${{ steps.prepare.outputs.skill_sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: prepare
+        id: prepare
+        env:
+          CONTROLS_TOKEN: ${{ github.token }}
+        run: python3 -m factory.prepare --out agent-input
+
+      - name: hand the workspace to the model's job
+        if: steps.prepare.outputs.ready == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: agent-input
+          path: agent-input/
+          if-no-files-found: error
+          retention-days: 1
+
+  agent:
+    name: agent
+    needs: prepare
+    if: needs.prepare.outputs.ready == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: agent-model
+    # No GITHUB_TOKEN scope and no OIDC token. The model credential is the
+    # only secret, and only the model step sees it.
+    permissions: {}
+    container:
+      # The class file's builder image, pinned by digest: the toolchain
+      # class-scope and go-test use.
+      image: ${{ needs.prepare.outputs.builder_image }}
+    env:
+      GOTOOLCHAIN: local
+      GOFLAGS: ""
+      GOWORK: "off"
+      GOPROXY: https://proxy.golang.org
+      GOSUMDB: sum.golang.org
+      GONOSUMDB: ""
+      GONOPROXY: ""
+      GOPRIVATE: ""
+      GOINSECURE: ""
+      CGO_ENABLED: "0"
+      DISABLE_AUTOUPDATER: "1"
+      DISABLE_UPDATES: "1"
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+    outputs:
+      harness_version: ${{ steps.install.outputs.harness_version }}
+      subtype: ${{ steps.model.outputs.subtype }}
+      num_turns: ${{ steps.model.outputs.num_turns }}
+      agent_seconds: ${{ steps.model.outputs.agent_seconds }}
+      input_tokens: ${{ steps.model.outputs.input_tokens }}
+      output_tokens: ${{ steps.model.outputs.output_tokens }}
+      cache_read_input_tokens: ${{ steps.model.outputs.cache_read_input_tokens }}
+      cache_creation_input_tokens: ${{ steps.model.outputs.cache_creation_input_tokens }}
+      cost_usd_estimate: ${{ steps.model.outputs.cost_usd_estimate }}
+      models: ${{ steps.model.outputs.models }}
+      permission_denials: ${{ steps.model.outputs.permission_denials }}
+      c21_result: ${{ steps.c21.outputs.result }}
+    steps:
+      - name: workspace from the prepare job
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: agent-input
+          path: input
+
+      - name: check the workspace and print the pinned skill's content hash
+        env:
+          SKILL_SHA256: ${{ needs.prepare.outputs.skill_sha256 }}
+        run: |
+          cd input
+          sha256sum -c manifest.sha256 > /dev/null
+          got=$(sha256sum skill/SKILL.md | cut -d' ' -f1)
+          echo "skill content sha256: $got"
+          test "$got" = "$SKILL_SHA256"
+          echo "queue item: $(cat item.json)"
+
+      - name: install Claude Code, pinned by version and checksum
+        id: install
+        env:
+          CC_VERSION: ${{ needs.prepare.outputs.harness_version }}
+          CC_PLATFORM: ${{ needs.prepare.outputs.harness_platform }}
+          CC_SHA256: ${{ needs.prepare.outputs.harness_sha256 }}
+        run: |
+          # Runtime libraries Claude Code's setup docs list for Alpine (musl),
+          # and bash: its Bash tool runs commands only in bash or zsh, and the
+          # image has busybox sh alone (found by the local dry run). openssl
+          # encrypts the summary after the model run.
+          apk add --no-cache bash libgcc libstdc++ ripgrep openssl
+          wget -q -O /usr/local/bin/claude \
+            "https://downloads.claude.ai/claude-code-releases/${CC_VERSION}/${CC_PLATFORM}/claude"
+          echo "${CC_SHA256}  /usr/local/bin/claude" | sha256sum -c -
+          chmod 0755 /usr/local/bin/claude
+          v=$(HOME=/tmp claude --version)
+          echo "claude --version: $v"
+          case "$v" in "${CC_VERSION} "*) ;; *) echo "::error::unexpected version"; exit 1 ;; esac
+          echo "harness_version=${CC_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: build the tool-call guard
+        run: |
+          cd input/agent/agenttool
+          go vet ./...
+          go test ./...
+          go build -o /usr/local/bin/agenttool .
+
+      # C-21's attempts from inside this job, with its own credentials: a
+      # write to the controls repo with whatever token this step's
+      # environment holds (none is given; the model step gets none either)
+      # and with none, a read of each secret other than the model credential
+      # (each lives in another environment, so each must come back empty
+      # here), and an OIDC token (absent without id-token). Names and
+      # statuses only. It runs only when the workflow is dispatched with
+      # c21_model_job; on every other run the step is listed as skipped, so
+      # the job's steps are the same.
+      - name: c21 attempts
+        id: c21
+        if: github.event_name == 'workflow_dispatch' && inputs.c21_model_job
+        env:
+          C21_SECRET_AGENT_APP_PRIVATE_KEY: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+          C21_SECRET_RATCHET_APP_PRIVATE_KEY: ${{ secrets.RATCHET_APP_PRIVATE_KEY }}
+          C21_SECRET_SEED_KEY: ${{ secrets.SEED_KEY }}
+          C21_SECRET_SUMMARY_KEY: ${{ secrets.SUMMARY_KEY }}
+        run: |
+          result=$(agenttool c21)
+          echo "$result"
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+
+      - name: model
+        id: model
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          sh input/agent/run-model.sh input output meta
+          cat meta/usage.txt >> "$GITHUB_OUTPUT"
+
+      # The artifact is public while it exists, and the upload step logs its
+      # size and digest. The summary goes in only padded to one fixed size
+      # and encrypted (CMS, RSA-OAEP, AES-256) to the open job's certificate,
+      # committed in this repository and checked by the workspace manifest;
+      # its private key is the agent-app environment's SUMMARY_KEY. So no one
+      # can read the model's own summary, or match its size or digest, and
+      # compare it with a seed's substituted pull request body (ADR-0024 §11).
+      - name: seal the summary for the opening job
+        run: |
+          cert=input/agent/summary-recipient.pem
+          grep -q 'BEGIN CERTIFICATE' "$cert" || { echo "::error::$cert holds no certificate"; exit 1; }
+          agenttool pad output/summary.md output/summary.padded
+          openssl cms -encrypt -binary -aes256 -outform DER -in output/summary.padded \
+            -out output/summary.md.cms -recip "$cert" -keyopt rsa_padding_mode:oaep
+          rm -f output/summary.md output/summary.padded
+          echo "sealed summary: $(wc -c < output/summary.md.cms) bytes"
+
+      - name: hand go.mod, go.sum and the sealed summary to the opening job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: agent-output
+          path: |
+            output/go.mod
+            output/go.sum
+            output/summary.md.cms
+          if-no-files-found: error
+          retention-days: 1
+
+  open:
+    name: open
+    needs: [prepare, agent]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: agent-app
+    permissions:
+      contents: write   # the records branch: the run record
+      actions: write    # delete this run's agent-output artifact before the pull request opens
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: the model's files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: agent-output
+          path: agent-output
+
+      # One hour, svc-hello only, and only the two permissions opening needs.
+      - name: agent App token for svc-hello
+        id: agent-app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+          owner: platform-factory
+          repositories: svc-hello
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: open
+        env:
+          SVC_TOKEN: ${{ steps.agent-app.outputs.token }}
+          CONTROLS_TOKEN: ${{ github.token }}
+          SEED_KEY: ${{ secrets.SEED_KEY }}
+          SUMMARY_KEY: ${{ secrets.SUMMARY_KEY }}
+          PREPARED: ${{ needs.prepare.outputs.prepared }}
+          AGENT_USAGE: ${{ toJSON(needs.agent.outputs) }}
+          HARNESS_VERSION: ${{ needs.agent.outputs.harness_version }}
+        run: python3 -m factory.open_pr --artifact-dir agent-output
+
+  # C-21's record of the attempts made from inside the model's job. Runs only
+  # when the dispatch asked for them; the controls repo's own token writes
+  # fixtures/c21-model-job-<run>-<attempt>.json, and an issue when an attempt
+  # was not refused.
+  c21-record:
+    name: c21-record
+    needs: agent
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.c21_model_job && needs.agent.outputs.c21_result != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write   # the records branch: the fixture record
+      issues: write     # an issue here when an attempt was not refused
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: record the model job's attempts
+        id: record
+        env:
+          CONTROLS_TOKEN: ${{ github.token }}
+          MODEL_JOB_RESULT: ${{ needs.agent.outputs.c21_result }}
+        run: python3 -m factory.fixtures --case c21-model-job
+
+      - name: outcome
+        env:
+          OUTCOME: ${{ steps.record.outputs.outcome }}
+        run: |
+          echo "c21 model-job outcome: ${OUTCOME:-none}"
+          test "$OUTCOME" = "as-expected"
+
+  # C-17: the scorecard "on each merge" and at the 20th clean merge. After a
+  # merge, and on the first run after the latest merge's escape (a)
+  # window closes, because the scorecard offers promotion only once each
+  # counted merge's window is clear (factory/merge_step.py, scorecard_due).
+  scorecard:
+    name: scorecard
+    needs: merge
+    if: needs.merge.outputs.scorecard_due == 'true'
+    permissions:
+      contents: write   # the records branch, and the promotion record's branch
+      issues: write     # the promotion issue
+      actions: read     # this repository's agent runs and their jobs
+    uses: ./.github/workflows/scorecard.yml

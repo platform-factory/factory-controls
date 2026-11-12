@@ -1,0 +1,64 @@
+# The reveal (ADR-0024 §11; the readiness note's "Close-out").
+#
+# Why: the seed schedule stayed secret during the run because it is an HMAC
+# of SEED_KEY, which only the agent-app environment holds. At the close this
+# job publishes the key to the records branch (close/seed-key.json), so anyone
+# can recompute the schedule and check it against the key hash in the class
+# file's first commit. It also opens each run record's sealed copy of the
+# agent's summary and checks every pull request body against it.
+#
+# Started by hand only, and only with the confirmation typed. It refuses to
+# run while the agent workflow is enabled: the close-out disables it first.
+name: reveal
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "the window is closed" to publish the seed key'
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  # Until the class file is there and filled, the run stops here, green,
+  # with one notice line: no App token is minted, no environment entered,
+  # nothing written (factory/guard.py). Every other job needs this one.
+  guard:
+    name: guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read    # this repository's class file
+    outputs:
+      ready: ${{ steps.guard.outputs.ready }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: is the class file filled?
+        id: guard
+        run: python3 -m factory.guard
+
+  reveal:
+    name: reveal
+    needs: guard
+    if: needs.guard.outputs.ready == 'true' && inputs.confirm == 'the window is closed'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: agent-app
+    permissions:
+      contents: write   # close/seed-key.json on the records branch
+      actions: read     # is the agent workflow disabled?
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: reveal
+        env:
+          SEED_KEY: ${{ secrets.SEED_KEY }}
+          CONTROLS_TOKEN: ${{ github.token }}
+        run: python3 -m factory.reveal

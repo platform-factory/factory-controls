@@ -1,0 +1,16 @@
+{
+  "name": "platform-factory-ratchet",
+  "url": "https://github.com/platform-factory/factory-controls",
+  "description": "M4's demotion App (ADR-0024 §7, §9): raises svc-hello's rung entry to one approval on an escape and labels open agent pull requests. Its code only raises; no webhook.",
+  "public": false,
+  "hook_attributes": {
+    "url": "https://example.invalid/no-webhook",
+    "active": false
+  },
+  "redirect_url": "https://github.com/platform-factory/factory-controls/blob/main/apps/README.md",
+  "default_permissions": {
+    "administration": "write",
+    "pull_requests": "write"
+  },
+  "default_events": []
+}

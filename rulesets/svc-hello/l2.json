@@ -27,19 +27,6 @@
               "id": 18810690,
               "type": "Team"
             }
-          },
-          {
-            "minimum_approvals": 1,
-            "file_patterns": [
-              "*",
-              ".github/**",
-              "!/go.mod",
-              "!/go.sum"
-            ],
-            "reviewer": {
-              "id": 18810690,
-              "type": "Team"
-            }
           }
         ],
         "require_code_owner_review": false,

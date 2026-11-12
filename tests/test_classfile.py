@@ -1,7 +1,7 @@
 """The committed class file holds the readiness note's frozen numbers.
 
 Before the class file's first commit the repository holds only its template
-(templates/go-module-bump.yaml, four placeholders); these tests validate
+(templates/go-module-bump.yaml, five placeholders); these tests validate
 whichever of the two is there.
 """
 
@@ -15,7 +15,9 @@ from tests import fakes
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = classfile.committed_path(ROOT)
 TEXT = SOURCE.read_text()
-PLACEHOLDERS = ["human_logins[0]", "seeds.key_sha256", "skill.tag", "skill.commit"]
+# Five placeholders; the wall ruleset's id stands in two places.
+PLACEHOLDERS = ["human_logins[0]", "seeds.key_sha256", "skill.tag", "skill.commit",
+                "rulesets.wall_ruleset_id", "rulesets.repository_rulesets[1].id"]
 
 # The note's queue, written out independently of the class file.
 NOTE_QUEUE = (
@@ -61,7 +63,7 @@ class ClassFileTest(unittest.TestCase):
     def test_the_class_file_or_its_template_never_both(self):
         """B3: the class file's first commit is the filled one, and the same
         pull request deletes the template. So the repository holds exactly one
-        of the two: the template with its four placeholders, or the class file
+        of the two: the template with its five placeholders, or the class file
         with none."""
         real, template = ROOT / classfile.CLASS_PATH, ROOT / classfile.TEMPLATE_PATH
         self.assertNotEqual(real.is_file(), template.is_file())
@@ -74,8 +76,44 @@ class ClassFileTest(unittest.TestCase):
     def test_placeholders_are_the_named_ones(self):
         self.assertEqual(classfile.unfilled(classfile.load(fakes.placeholder_class_file_text())), PLACEHOLDERS)
         filled = fakes.class_file_text(key_sha256="a" * 64, skill_tag="go-module-bump/v0.1.0-rc.1",
-                                       skill_commit="b" * 40)
+                                       skill_commit="b" * 40, wall_id=21000001)
         self.assertEqual(classfile.unfilled(classfile.load(filled)), [])
+
+    def test_two_rulesets_with_the_wall_id_filled_alike(self):
+        """Probe P1: the wall entry is in a ruleset of its own, so the class
+        file names both and the listing GitHub must return holds both. The
+        wall's id is filled in two places, and they must agree."""
+        cf = classfile.load(fakes.class_file_text(wall_id=21000001))
+        r = cf["rulesets"]
+        self.assertEqual((r["ruleset_name"], r["wall_ruleset_name"], r["wall_path"]),
+                         ("main-protection", "class-wall", "rulesets/svc-hello/wall.json"))
+        self.assertEqual(sorted((x["id"], x["name"]) for x in r["repository_rulesets"]),
+                         [(20204893, "main-protection"), (21000001, "class-wall")])
+        half = fakes.class_file_text(wall_id=21000001).replace("wall_ruleset_id: 21000001", "wall_ruleset_id: 21000002")
+        with self.assertRaises(classfile.ClassFileError) as cm:
+            classfile.load(half)
+        self.assertIn("rulesets.repository_rulesets", str(cm.exception))
+        with self.assertRaises(classfile.ClassFileError):
+            classfile.load(fakes.class_file_text(wall_id='"21000001"'))   # an id is a number
+        third = fakes.class_file_text(wall_id=21000001).replace(
+            "    - {id: 21000001, name: class-wall",
+            "    - {id: 1, name: org-wide, source_type: Organization, source: platform-factory, target: branch}\n"
+            "    - {id: 21000001, name: class-wall")
+        with self.assertRaises(classfile.ClassFileError):
+            classfile.load(third)
+
+    def test_a_run_that_reads_the_rulesets_waits_for_the_wall_id(self):
+        import tempfile
+        from pathlib import Path
+        text = fakes.class_file_text(key_sha256="a" * 64, skill_tag="t", skill_commit="b" * 40,
+                                     wall_id="WALL-RULESET-ID")              # only the wall id unfilled
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "cf.yaml"
+            p.write_text(text)
+            with self.assertRaises(classfile.NotReady) as cm:
+                classfile.require({"CLASS_FILE": str(p)}, {"human_logins[0]", "rulesets"})
+            self.assertIn("rulesets.wall_ruleset_id", cm.exception.reason)
+            self.assertEqual(classfile.require({"CLASS_FILE": str(p)}, {"human_logins[0]"})["class"], "go-module-bump")
 
     def test_ruleset_hashes_match_committed_files(self):
         for which in ("l1", "l2"):

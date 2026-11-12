@@ -81,6 +81,23 @@ class PreMergeTest(unittest.TestCase):
         out = merge_step.pre_merge(ctx(base_world(), 40, "pre-merge"))
         self.assertTrue(out["ok"], out["reasons"])
 
+    def test_refuses_while_the_wall_ruleset_differs(self):
+        """The wall entry is in a ruleset of its own (probe P1's fallback); a
+        wall that is disabled, changed or gone stops merges as a difference in
+        the rung ruleset does, and the refusal stands until it is restored."""
+        for change in ("disabled", "missing"):
+            w = base_world()
+            if change == "disabled":
+                w.wall["enforcement"] = "disabled"
+            else:
+                w.wall = None
+            out = merge_step.pre_merge(ctx(w, 40, "pre-merge"))
+            self.assertFalse(out["ok"], change)
+            self.assertIn("a ruleset difference stands", out["reasons"])
+            self.assertEqual(len(out["detector"]["acted"]), 1)
+            again = merge_step.pre_merge(ctx(w, 45, "pre-merge"))
+            self.assertEqual((again["ok"], again["detector"]["acted"]), (False, []))
+
     def test_refuses_while_mains_latest_push_go_test_has_not_succeeded(self):
         w = base_world()
         w.runs.clear()

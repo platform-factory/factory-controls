@@ -3,7 +3,7 @@
 Why: agent.yml, detector.yml and scorecard.yml start on their cron as soon
 as `main` is pushed, and `main` is pushed without the class file: its first
 commit is the filled one the listed human approves, and until then only the
-template (`templates/go-module-bump.yaml`, four placeholders) exists. A
+template (`templates/go-module-bump.yaml`, five placeholders) exists. A
 class file that still holds a placeholder is treated the same. Until both
 are settled a run must change nothing: no App token minted, no environment
 entered, no write to svc-hello, to the records branch or to an issue. So

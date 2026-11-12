@@ -1,4 +1,5 @@
-"""l1.json is the note's L1 listing built on the live ruleset; l2.json differs in one field."""
+"""l1.json is the note's L1 listing built on the live ruleset; l2.json differs in one field;
+wall.json holds the wall entry in a ruleset of its own (probe P1's fallback)."""
 
 import copy
 import json
@@ -36,11 +37,10 @@ class L1L2Test(unittest.TestCase):
         self.assertIs(p["required_review_thread_resolution"], False)
         self.assertIs(p["require_extra_approval_for_unattributed_changes"], True)
         self.assertEqual(p["allowed_merge_methods"], ["squash"])
-        rung, wall = p["required_reviewers"]
-        self.assertEqual(rung, {"minimum_approvals": 1, "file_patterns": ["/go.mod", "/go.sum"],
-                                "reviewer": {"id": 18810690, "type": "Team"}})
-        self.assertEqual(wall, {"minimum_approvals": 1, "file_patterns": ["*", ".github/**", "!/go.mod", "!/go.sum"],
-                                "reviewer": {"id": 18810690, "type": "Team"}})
+        # The rung entry only: GitHub refuses a second entry for the same team
+        # in one ruleset (probe P1), so the wall entry is in wall.json.
+        self.assertEqual(p["required_reviewers"], [{"minimum_approvals": 1, "file_patterns": ["/go.mod", "/go.sum"],
+                                                    "reviewer": {"id": 18810690, "type": "Team"}}])
         checks = next(r for r in l1["rules"] if r["type"] == "required_status_checks")["parameters"]
         self.assertIs(checks["strict_required_status_checks_policy"], True)
         self.assertEqual(checks["required_status_checks"], [{"context": "class-scope", "integration_id": 15368},
@@ -56,16 +56,73 @@ class L1L2Test(unittest.TestCase):
             "rules/pull_request/dismiss_stale_reviews_on_push",
             "rules/pull_request/allowed_merge_methods",
             "rules/pull_request/required_reviewers/" + rs.reviewer_key(pr_params(fakes.l1())["required_reviewers"][0]),
-            "rules/pull_request/required_reviewers/" + rs.reviewer_key(pr_params(fakes.l1())["required_reviewers"][1]),
             "rules/required_status_checks",
         ])
         self.assertEqual(paths, expected)
 
     def test_live_today_is_not_l1(self):
-        chk = detector.ruleset_check(LIVE, LISTING, fakes.l1(), fakes.l2(), False,
-                                     fakes.load_cf()["rulesets"]["repository_rulesets"])
+        chk = detector.ruleset_check({"rung": LIVE, "wall": None, "listing": LISTING}, fakes.l1(), fakes.l2(),
+                                     fakes.wall(), False, fakes.load_cf()["rulesets"]["repository_rulesets"])
         self.assertFalse(chk["ok"])
-        self.assertEqual(chk["list_diff"], [])  # the list of rulesets already matches
+        self.assertNotEqual(chk["diff_vs_l1"], [])
+        self.assertEqual(chk["wall_diff"], [{"path": [], "expected": "ruleset", "actual": "not found"}])
+        self.assertNotEqual(chk["list_diff"], [])   # class-wall is not on svc-hello yet
+
+
+class WallTest(unittest.TestCase):
+    """The wall entry in a ruleset of its own, saying nothing else."""
+
+    def test_wall_is_the_notes_wall_entry_alone(self):
+        w = fakes.wall()
+        self.assertEqual((w["name"], w["target"], w["enforcement"], w["bypass_actors"]),
+                         ("class-wall", "branch", "active", []))
+        self.assertEqual(w["conditions"], fakes.l1()["conditions"])
+        self.assertEqual([r["type"] for r in w["rules"]], ["pull_request"])
+        self.assertEqual(pr_params(w)["required_reviewers"], [{
+            "minimum_approvals": 1, "file_patterns": ["*", ".github/**", "!/go.mod", "!/go.sum"],
+            "reviewer": {"id": 18810690, "type": "Team"}}])
+        # Every other pull_request parameter is the rung ruleset's, so the two
+        # layered say what one ruleset with both entries would have said.
+        strip = lambda p: {k: v for k, v in p.items() if k != "required_reviewers"}  # noqa: E731
+        self.assertEqual(strip(pr_params(w)), strip(pr_params(fakes.l1())))
+        self.assertEqual(rs.wall_errors(fakes.l1(), w, 1), [])
+        self.assertEqual(rs.wall_errors(fakes.l2(), w, 1), [])
+
+    def test_wall_errors(self):
+        cases = []
+        w = fakes.wall()
+        pr_params(w)["dismiss_stale_reviews_on_push"] = False
+        cases.append((w, "differ besides required_reviewers"))
+        w = fakes.wall()
+        w["enforcement"] = "disabled"
+        cases.append((w, "not active"))
+        w = fakes.wall()
+        w["rules"].append({"type": "deletion"})
+        cases.append((w, "exactly one rule"))
+        w = fakes.wall()
+        pr_params(w)["required_reviewers"] = pr_params(fakes.l1())["required_reviewers"]
+        cases.append((w, "the rung entry's patterns"))
+        w = fakes.wall()
+        pr_params(w)["required_reviewers"][0]["minimum_approvals"] = 0
+        cases.append((w, "minimum_approvals is 0"))
+        w = fakes.wall()
+        w["bypass_actors"] = [{"actor_id": 5, "actor_type": "Integration", "bypass_mode": "always"}]
+        cases.append((w, "bypass actors"))
+        for body, words in cases:
+            errors = rs.wall_errors(fakes.l1(), body, 1)
+            self.assertTrue(any(words in e for e in errors), (words, errors))
+        two = fakes.l1()
+        pr_params(two)["required_reviewers"].append(pr_params(fakes.wall())["required_reviewers"][0])
+        self.assertTrue(any("one required-reviewers entry" in e for e in rs.wall_errors(two, fakes.wall(), 1)))
+
+    def test_the_committed_bodies_are_checked_together(self):
+        from factory import state as st
+        cf = fakes.load_cf()
+        bodies = st.committed_bodies(cf)
+        self.assertEqual(sorted(bodies), ["l1", "l2", "wall"])
+        cf["rulesets"]["wall_sha256"] = "0" * 64
+        with self.assertRaises(ValueError):
+            st.committed_bodies(cf)
 
 
 class NormalizeTest(unittest.TestCase):
@@ -76,9 +133,9 @@ class NormalizeTest(unittest.TestCase):
         self.assertEqual(rs.diff(rs.normalize(fakes.l1()), rs.normalize(got)), [])
 
     def test_pattern_order_is_meaningful(self):
-        got = copy.deepcopy(fakes.l1())
-        pr_params(got)["required_reviewers"][1]["file_patterns"] = ["!/go.mod", "!/go.sum", "*", ".github/**"]
-        self.assertNotEqual(rs.diff(rs.normalize(fakes.l1()), rs.normalize(got)), [])
+        got = copy.deepcopy(fakes.wall())
+        pr_params(got)["required_reviewers"][0]["file_patterns"] = ["!/go.mod", "!/go.sum", "*", ".github/**"]
+        self.assertNotEqual(rs.diff(rs.normalize(fakes.wall()), rs.normalize(got)), [])
 
     def test_missing_bypass_actors_is_a_difference(self):
         got = fakes.as_get(fakes.l1())
@@ -93,7 +150,7 @@ class NormalizeTest(unittest.TestCase):
 
     def test_rung_path_refuses_l2_that_differs_in_two_fields(self):
         bad = fakes.l2()
-        pr_params(bad)["required_reviewers"][1]["minimum_approvals"] = 0
+        pr_params(bad)["required_approving_review_count"] = 1
         with self.assertRaises(rs.RungError):
             rs.rung_path(fakes.l1(), bad)
 

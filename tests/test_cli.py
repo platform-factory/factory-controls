@@ -73,10 +73,10 @@ def ago(minutes: float) -> str:
 
 
 def filled_class_file(d: str, tag: str = SKILL_TAG, commit: str = SKILL_COMMIT) -> str:
-    """The class file (or its template) with the four values filled as the
+    """The class file (or its template) with the five values filled as the
     class file's first commit fills them, the test key's hash and login in."""
     text = fakes.class_file_text(human=HUMAN, key_sha256=sd.key_sha256(SEED_KEY), skill_tag=tag,
-                                 skill_commit=commit)
+                                 skill_commit=commit, wall_id=fakes.WALL_ID)
     p = Path(d) / "go-module-bump.yaml"
     p.write_text(text)
     return str(p)

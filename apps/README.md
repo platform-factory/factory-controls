@@ -16,7 +16,7 @@ address bar is what step 3 below converts. Do it within the hour.
   run or a commit status, so it cannot forge `class-scope` or `go-test`;
   without `administration` it cannot touch a ruleset; without `issues` it
   holds nothing it does not need. It can still label pull requests, review
-  them and merge them, which is why the ruleset's team entries, the label
+  them and merge them, which is why the rulesets' team entries, the label
   rule (labels count only from the listed human's own events) and
   `class-scope` hold the boundary, not the App's permissions alone.
 - **`platform-factory-ratchet`** (`ratchet-app.manifest.json`) is the
@@ -25,8 +25,9 @@ address bar is what step 3 below converts. Do it within the hour.
   `administration: write` (no narrower permission edits a repository
   ruleset, and `GITHUB_TOKEN` has no `administration` key) and
   `pull_requests: write` (labels). `administration` also lets it lower an
-  entry, edit `bypass_actors` or delete the ruleset; "only raises" is held by
-  `factory/ratchet.py`, not by GitHub, and its key sits in the `ratchet`
+  entry, edit `bypass_actors` or delete either ruleset (the rung ruleset or
+  the wall ruleset, two since probe P1); "only raises" and "never the wall"
+  are held by `factory/ratchet.py`, not by GitHub, and its key sits in the `ratchet`
   environment that only the detector and the merge step's `pre-merge` job use.
 
 GitHub grants `metadata: read` to every App; the ratchet manifest does not

@@ -70,7 +70,8 @@ the record; `restoration.actions` lists what the fixture itself did;
 - the push to `main` carries an empty commit with `main`'s own tree;
 - the workflow file it tries to add starts only by hand and does nothing;
 - the `replace` is a module replaced by itself at its own version;
-- the ruleset `PUT` sends the ruleset's own live body;
+- the ruleset `PUT` sends the rung ruleset's own live body (one attempt: the
+  App lacks `administration`, which covers the wall ruleset alike);
 - the forcing variable's value names no queue item;
 - the check run and the commit status conclude `failure` on `main`'s tip;
 - labels it applies, approvals it gives and comments it edits are undone

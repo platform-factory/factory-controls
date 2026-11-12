@@ -10,6 +10,15 @@ mappings, so `diff` reports a change in meaning and nothing else.
 
 Order that carries meaning is kept: a required-reviewers entry's
 file_patterns, where a `!` pattern un-matches only the patterns before it.
+
+Two rulesets, not one: the rung entry sits in the rung ruleset
+(`main-protection`, l1.json and l2.json) and the wall entry in a ruleset of
+its own (`class-wall`, wall.json). ADR-0024 §4 put both entries in one
+ruleset, but GitHub refuses two required-reviewers entries for one team in
+one ruleset ("Required reviewers must be unique", probe P1, 2026-11-12), and
+the readiness note's P1 fallback is two rulesets. GitHub applies every
+active ruleset on a branch together, so `wall_errors` checks that the wall
+ruleset says nothing the rung ruleset does not, besides the wall entry.
 """
 
 from __future__ import annotations
@@ -142,6 +151,45 @@ def find_rung_entries(body: dict, path: list) -> list[dict]:
             if reviewer_key(e) == key:
                 found.append(e)
     return found
+
+
+def wall_errors(rung: dict, wall: dict, wall_minimum: int) -> list[str]:
+    """Why a wall ruleset body does not layer cleanly with a rung ruleset
+    body; empty when it does. The wall holds one `pull_request` rule whose
+    parameters equal the rung ruleset's except `required_reviewers`, which
+    holds one entry, at `wall_minimum`, for another set of patterns than the
+    rung ruleset's one entry; the same target and conditions; active; no
+    bypass actor. So the two together say what one ruleset with both entries
+    would have said."""
+    errors = []
+    rung_pr = [r for r in rung.get("rules", []) if r.get("type") == "pull_request"]
+    wall_rules = wall.get("rules", [])
+    if len(rung_pr) != 1:
+        return ["the rung ruleset must hold one pull_request rule"]
+    if [r.get("type") for r in wall_rules] != ["pull_request"]:
+        return ["the wall ruleset must hold exactly one rule, pull_request"]
+    rp, wp = rung_pr[0].get("parameters", {}), wall_rules[0].get("parameters", {})
+    rr, wr = rp.get("required_reviewers", []), wp.get("required_reviewers", [])
+    if len(rr) != 1:
+        errors.append(f"the rung ruleset must hold one required-reviewers entry, found {len(rr)}")
+    if len(wr) != 1:
+        errors.append(f"the wall ruleset must hold one required-reviewers entry, found {len(wr)}")
+    elif rr and reviewer_key(wr[0]) == reviewer_key(rr[0]):
+        errors.append("the wall entry has the rung entry's patterns")
+    elif wr[0].get("minimum_approvals") != wall_minimum:
+        errors.append(f"the wall entry's minimum_approvals is {wr[0].get('minimum_approvals')}, not {wall_minimum}")
+    others = diff(_norm_params("pull_request", {k: v for k, v in rp.items() if k != "required_reviewers"}),
+                  _norm_params("pull_request", {k: v for k, v in wp.items() if k != "required_reviewers"}))
+    if others:
+        errors.append(f"the pull_request parameters differ besides required_reviewers: {others}")
+    for k in ("target", "conditions"):
+        if rung.get(k) != wall.get(k):
+            errors.append(f"the two rulesets' {k} differ")
+    if wall.get("enforcement") != "active":
+        errors.append("the wall ruleset's enforcement is not active")
+    if wall.get("bypass_actors") != []:
+        errors.append("the wall ruleset has bypass actors")
+    return errors
 
 
 def path_str(path: list) -> str:

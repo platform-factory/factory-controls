@@ -134,10 +134,16 @@ Event keys:
 
 - `escape-a-pr<N>`: escape (a) of queue-item pull request N.
 - `escape-b-pr<N>`: escape (b), N being the reverting pull request.
-- `ruleset-<16 hex>`: a ruleset difference, keyed by the ruleset's version
-  (the live ruleset's `updated_at` and the id and `updated_at` of every
-  ruleset on the repository, hashed). A difference that stands across runs
-  is acted on once; a new edit is a new event.
+- `ruleset-<16 hex>`: a ruleset difference, keyed by the rulesets' version
+  (the `updated_at` of the rung ruleset and of the wall ruleset, and the id
+  and `updated_at` of every ruleset on the repository, hashed). A difference
+  that stands across runs is acted on once; a new edit of either ruleset is
+  a new event. There are two rulesets because GitHub refuses two
+  required-reviewers entries for one team in one ruleset (probe P1; the
+  readiness note's fallback): the event's `diff_vs_l1` is the rung
+  ruleset's difference from L1, `wall_diff` the wall ruleset's from
+  `wall.json` (`[{"path": [], "actual": "not found"}]` when it is gone), and
+  `list_diff` the repository's listing's from the class file's two.
 - `<event key>-retry-<phase>-<run_id>-<attempt>`: one more try at the raise
   for a demotion whose ratchet write failed (type `ratchet-retry`, below).
 
@@ -194,7 +200,8 @@ acceptance time, and its issue is the demotion's.
 
 ### `ratchet/<event_key>-before.json` and `-after.json`, schema 1
 
-The full ruleset as GitHub returned it, read just before and just after the
+The full rung ruleset (`main-protection`, the only one the ratchet reads or
+writes) as GitHub returned it, read just before and just after the
 ratchet's decision. `before` also carries the plan: `action` (`write`,
 `noop`, `refuse`), `reason`, and the `diff` that made it refuse, if any.
 

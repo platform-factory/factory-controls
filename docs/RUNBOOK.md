@@ -32,9 +32,24 @@ the note wins.
 - Ruleset records on `svc-hello` go to `platform-factory/.github`,
   `rulesets/svc-hello/`, named `<UTC time>-<step>-<before|after|history>-<change>.json`,
   the form M3 used. Two names are read by machinery and must be exactly:
-  the switch-on's after-file ends `-after-l1-switch-on.json` (the scorecard
-  starts "changes after the switch-on" at its time), and the history read
-  beside each before/after pair ends `-history-<change>.json`.
+  the switch-on's after-file for `main-protection` ends
+  `-after-l1-switch-on.json` (the scorecard starts "changes after the
+  switch-on" at its time), and the history read beside each before/after
+  pair ends `-history-<change>.json`. The switch-on is two edits (see "The
+  L1 switch-on" after step 7); the first, on `class-wall`, uses the change
+  name `l1-switch-on-wall`, which the scorecard does not read as the
+  switch-on.
+- There are two rulesets on `svc-hello`'s default branch, not one: the
+  *rung ruleset* `main-protection` (id 20204893; `rulesets/svc-hello/l1.json`
+  and `l2.json`) holds the rung entry and every other rule, and the *wall
+  ruleset* `class-wall` (`rulesets/svc-hello/wall.json`) holds the wall
+  entry alone. ADR-0024 §4 put both entries in one ruleset; probe P1 showed
+  GitHub refuses two required-reviewers entries for one team in one ruleset
+  ("Required reviewers must be unique"), and the readiness note's P1
+  fallback is two rulesets. M4's entry records this as a deviation. GitHub
+  applies both rulesets together; `wall.json` carries the same
+  `pull_request` parameters as `l1.json`, so the pair says what the one
+  ruleset would have said.
 - Labels are applied in the pull request's sidebar (**Labels** → tick the
   label). Approvals: **Files changed** → **Review changes** → **Approve** →
   **Submit review**. A close decision: **Review changes** → **Comment**,
@@ -236,15 +251,19 @@ the probe's table.
 The controls repository is created without `classes/go-module-bump.yaml`:
 the readiness note makes the class file's first commit the filled one,
 after P3 and P4, approved by the listed human. Until then only its template
-is there, `templates/go-module-bump.yaml`, with four placeholders.
+is there, `templates/go-module-bump.yaml`, with five placeholders.
+
+Before this pull request the delegate creates `class-wall` on `svc-hello`,
+disabled, to learn its id ("Before step 7" below).
 
 The delegate opens one pull request in `factory-controls` that adds
-`classes/go-module-bump.yaml`, a copy of the template with the four
+`classes/go-module-bump.yaml`, a copy of the template with the five
 placeholders filled (the listed login, the seed key's hash from step 5, the
-skill's pre-release tag and commit, each in double quotes as `l1_sha256` is)
-and the template's own opening paragraph dropped, and deletes
-`templates/go-module-bump.yaml`. So the frozen numbers and the L1 and L2
-hashes come over as they stood in the template. The listed human reads the
+skill's pre-release tag and commit, each in double quotes as `l1_sha256` is;
+and `class-wall`'s id, as a bare number, in both places it appears) and the
+template's own opening paragraph dropped, and deletes
+`templates/go-module-bump.yaml`. So the frozen numbers and the L1, L2 and
+wall hashes come over as they stood in the template. The listed human reads the
 class file against the readiness note, approves the pull request and merges
 it (squash). That merge commit is the class file's first commit.
 
@@ -261,8 +280,8 @@ Expected: an approval by `<listed-human-login>`; merged; the files are
 `classes/go-module-bump.yaml` added and `templates/go-module-bump.yaml`
 removed; the path's history is that one merge commit; the hashes check
 (`class file: classes/go-module-bump.yaml`); the guard prints `"ready": true`.
-The merge commit, the seed key's hash and the two ruleset hashes go into
-`$EVIDENCE/17-class-file-first-commit.txt`.
+The merge commit, the seed key's hash, `class-wall`'s id and the three
+ruleset hashes go into `$EVIDENCE/17-class-file-first-commit.txt`.
 
 Until this merge, every workflow that runs the class stops at its first job,
 `guard`, green, with the notice "class file not ready" (`factory/guard.py`):
@@ -277,10 +296,73 @@ writes its files to the records branch. The agent's workflow opens queue
 item 1 by itself at its first run after both Apps are installed, unless it
 has been disabled for the fixtures first.
 
+### Before step 7: `class-wall`, created disabled (the delegate; not a human step)
+
+Its id is a fact the class file must hold, and it exists only once GitHub
+has made the ruleset. Created with `enforcement: disabled`, it changes
+nothing on `svc-hello` until the switch-on enables it. From this
+repository's root:
+
+```sh
+T=$(date -u +%Y%m%dT%H%M%SZ); D=<checkout of platform-factory/.github>/rulesets/svc-hello
+tmp=$(mktemp)
+python3 -c 'import json; b=json.load(open("rulesets/svc-hello/wall.json")); b["enforcement"]="disabled"; print(json.dumps(b))' > "$tmp"
+gh api -X POST repos/platform-factory/svc-hello/rulesets --input "$tmp" > "$D/$T-NN-after-wall-create.json"
+rm -f "$tmp"
+gh api "repos/platform-factory/svc-hello/rulesets/$(jq .id "$D/$T-NN-after-wall-create.json")/history" \
+  > "$D/$T-NN-history-wall-create.json"
+gh api repos/platform-factory/svc-hello/rulesets --jq '.[] | {id, name, enforcement}'
+```
+
+Expected: the listing shows `main-protection` as it was and `class-wall`
+disabled. The id (`jq .id` on the after-file) fills `WALL-RULESET-ID` in
+step 7. The delegate commits the files to `platform-factory/.github`.
+
+### The L1 switch-on (the delegate; not a human step)
+
+The note's order step 6 describes "one recorded ruleset edit". With the P1
+fallback it is two recorded edits, and their order matters:
+
+1. `class-wall` from disabled to active, exactly `wall.json`, first. While
+   `main-protection` still holds its earlier form, both apply, which is
+   stricter, never looser. The other order would leave every path other
+   than `go.mod` and `go.sum` without the wall entry between the two edits.
+2. `main-protection` to exactly `l1.json`: the rung entry, `class-scope`
+   required beside `go-test`, strict checks, squash-only merges and stale
+   dismissal.
+
+```sh
+T=$(date -u +%Y%m%dT%H%M%SZ); D=<checkout of platform-factory/.github>/rulesets/svc-hello; W=<class-wall id>
+gh api repos/platform-factory/svc-hello/rulesets/$W > "$D/$T-NN-before-l1-switch-on-wall.json"
+gh api repos/platform-factory/svc-hello/rulesets/$W/history > "$D/$T-NN-history-before-l1-switch-on-wall.json"
+gh api -X PUT repos/platform-factory/svc-hello/rulesets/$W --input rulesets/svc-hello/wall.json
+T2=$(date -u +%Y%m%dT%H%M%SZ)
+gh api repos/platform-factory/svc-hello/rulesets/$W > "$D/$T2-NN-after-l1-switch-on-wall.json"
+gh api repos/platform-factory/svc-hello/rulesets/$W/history > "$D/$T2-NN-history-l1-switch-on-wall.json"
+T3=$(date -u +%Y%m%dT%H%M%SZ)
+gh api repos/platform-factory/svc-hello/rulesets/20204893 > "$D/$T3-NN-before-l1-switch-on.json"
+gh api repos/platform-factory/svc-hello/rulesets/20204893/history > "$D/$T3-NN-history-before-l1-switch-on.json"
+gh api -X PUT repos/platform-factory/svc-hello/rulesets/20204893 --input rulesets/svc-hello/l1.json
+T4=$(date -u +%Y%m%dT%H%M%SZ)
+gh api repos/platform-factory/svc-hello/rulesets/20204893 > "$D/$T4-NN-after-l1-switch-on.json"
+gh api repos/platform-factory/svc-hello/rulesets/20204893/history > "$D/$T4-NN-history-l1-switch-on.json"
+for pair in "wall.json $D/$T2-NN-after-l1-switch-on-wall.json" "l1.json $D/$T4-NN-after-l1-switch-on.json"; do
+  set -- $pair
+  python3 -c 'import json,sys; from factory import ruleset as rs; print(json.dumps(rs.diff(rs.normalize(json.load(open("rulesets/svc-hello/"+sys.argv[1]))), rs.normalize(json.load(open(sys.argv[2])))), indent=2))' "$1" "$2"
+done
+gh api repos/platform-factory/svc-hello/rulesets --jq '[.[] | {id, name, enforcement}]'
+```
+
+Expected: both comparisons print `[]`; the listing holds exactly
+`main-protection` and `class-wall`, both active; each history shows one new
+version. The delegate commits the eight files to `platform-factory/.github`.
+The scorecard's switch-on time is the `-after-l1-switch-on.json` file's,
+when both edits are in force.
+
 ### 8. Install both Apps on `svc-hello` after the L1 switch-on is recorded (owner)
 
-Only after the switch-on's before, after and history files are committed in
-`platform-factory/.github`. Install each App with **Only select
+Only after both switch-on edits' before, after and history files are
+committed in `platform-factory/.github`. Install each App with **Only select
 repositories** → `svc-hello` (`apps/README.md`, step 5). Then confirm that no
 organisation secret or variable reaches `svc-hello` and re-read the `claude`
 installation:
@@ -430,7 +512,7 @@ python3 -c 'import json,sys; from factory import ruleset as rs; print(json.dumps
 
 (`NN` is the next step number in that directory.) Expected: the last command
 prints `[]` (the live ruleset is exactly `l2.json`), and the history shows
-one new version. The delegate commits the files to `platform-factory/.github`
+one new version. `class-wall` is not touched: it is the same on every rung. The delegate commits the files to `platform-factory/.github`
 and adds a row to its `rulesets/README.md`.
 
 ### 13. Each fixture record, one or two (listed human, then owner)
@@ -475,14 +557,17 @@ A lift is only for a fault or a probe fallback (the note's "A lift"):
    `gh workflow disable agent.yml --repo platform-factory/factory-controls` and
    `gh run list --workflow agent.yml --repo platform-factory/factory-controls --status in_progress`.
 2. Just after a detector run (`gh run list --workflow detector.yml --repo platform-factory/factory-controls --limit 1`),
-   the owner records the ruleset and its history (step 12's first two
-   lines, `<change>` = `lift-<what>`), lowers the named entry or removes the
-   named check (`gh api -X PUT ... --input <edited copy>`), merges the pull
-   request with its head pinned
+   the owner records the ruleset it lifts and its history (step 12's first
+   two lines, `<change>` = `lift-<what>`): `main-protection` for the rung
+   entry or a check, `class-wall` (its own id) for the wall entry. The owner
+   lowers the named entry or removes the named check
+   (`gh api -X PUT ... --input <edited copy>`), merges the pull request with
+   its head pinned
    (`gh api -X PUT repos/platform-factory/svc-hello/pulls/<n>/merge -f sha=<head> -f merge_method=squash`),
-   restores (`gh api -X PUT repos/platform-factory/svc-hello/rulesets/20204893 --input rulesets/svc-hello/l1.json`,
-   or `l2.json` while L2 is accepted), and records again; the restored
-   ruleset is compared with the committed JSON by step 12's last command.
+   restores (`main-protection` from `rulesets/svc-hello/l1.json`, or
+   `l2.json` while L2 is accepted; `class-wall` from
+   `rulesets/svc-hello/wall.json`), and records again; the restored ruleset
+   is compared with its committed JSON by step 12's last command.
 3. The delegate re-enables the workflow:
    `gh workflow enable agent.yml --repo platform-factory/factory-controls`.
 

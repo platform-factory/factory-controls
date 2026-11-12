@@ -46,15 +46,15 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(ratchet.plan_raise(fakes.as_get(self.l1), self.l1, self.l2)["action"], "noop")
 
     def test_other_differences_are_kept_not_repaired(self):
-        """With the wall lowered and the rung at 0, only the rung is raised."""
+        """With stale dismissal turned off and the rung at 0, only the rung is raised."""
         live = fakes.as_get(self.l2)
-        pr_params(live)["required_reviewers"][1]["minimum_approvals"] = 0
+        pr_params(live)["dismiss_stale_reviews_on_push"] = False
         plan = ratchet.plan_raise(live, self.l1, self.l2)
         self.assertEqual(plan["action"], "write")
         d = rs.diff(rs.normalize(live), rs.normalize(plan["body"]))
         self.assertEqual(len(d), 1)
         self.assertEqual(d[0]["path"], rs.rung_path(self.l1, self.l2))
-        self.assertEqual(pr_params(plan["body"])["required_reviewers"][1]["minimum_approvals"], 0)
+        self.assertIs(pr_params(plan["body"])["dismiss_stale_reviews_on_push"], False)
 
     def test_refuses_to_lower_a_rung_above_one(self):
         live = fakes.as_get(self.l1)
@@ -173,6 +173,25 @@ class RaiseRungTest(unittest.TestCase):
         self.assertEqual((res["result"], res["issue"], res["error_status"]), ("write-failed", None, 502))
         self.assertEqual(res["issue_errors"][0]["status"], 403)
         self.assertEqual(w.records.read("ratchet/escape-a-pr5-after.json")["error"]["status"], 502)
+
+    def test_the_ratchet_sends_no_request_to_the_wall_ruleset(self):
+        """The wall ruleset (probe P1's fallback: the wall entry in a ruleset
+        of its own) is the same on every rung. The ratchet raises, refuses or
+        does nothing, and in every case neither reads nor writes the wall,
+        even while the wall itself differs."""
+        wall_path = f"repos/{fakes.SVC}/rulesets/{fakes.WALL_ID}"
+        for rung, wall_change in ((0, "disabled"), (1, "disabled"), (0, None), (3, "lowered")):
+            w = World()
+            w.set_rung(rung)
+            if wall_change == "disabled":
+                w.wall["enforcement"] = "disabled"
+            elif wall_change == "lowered":
+                pr_params(w.wall)["required_reviewers"][0]["minimum_approvals"] = 0
+            res = ratchet.raise_rung(w.gh, w.records, w.cf, fakes.l1(), fakes.l2(), "ruleset-x", {"x": 1})
+            self.assertIn(res["result"], ("raised", "already-1", "refused"))
+            self.assertEqual([c for c in w.gh.calls if c["path"].startswith(wall_path)], [], (rung, wall_change))
+            touched = {c["path"] for c in w.gh.calls if "/rulesets" in c["path"]}
+            self.assertLessEqual(touched, {f"repos/{fakes.SVC}/rulesets/{fakes.RUNG_ID}"})
 
     def test_already_at_one_writes_no_ruleset_and_opens_no_issue(self):
         w = World()

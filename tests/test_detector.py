@@ -377,7 +377,7 @@ class RulesetComparisonTest(unittest.TestCase):
         w.push_run(501, "m1", [job("completed", "success", 9)])
         for r in w.ruleset["rules"]:
             if r["type"] == "pull_request":
-                r["parameters"]["required_reviewers"][1]["minimum_approvals"] = 0  # the wall lowered
+                r["parameters"]["dismiss_stale_reviews_on_push"] = False  # stale dismissal turned off
         out = run(w, 40)
         self.assertEqual(len(out["acted"]), 1)
         self.assertFalse(out["ruleset"]["ok"])
@@ -413,10 +413,86 @@ class RulesetComparisonTest(unittest.TestCase):
     def test_timestamps_and_ids_are_not_differences(self):
         live = fakes.as_get(fakes.l1(), "2030-01-01T00:00:00Z")
         live["id"] = 1
-        chk = detector.ruleset_check(live, [{"id": 20204893, "name": "main-protection", "source_type": "Repository",
-                                             "source": fakes.SVC, "target": "branch", "updated_at": "x"}],
-                                     fakes.l1(), fakes.l2(), False, fakes.load_cf()["rulesets"]["repository_rulesets"])
+        wall = fakes.as_get(fakes.wall(), "2031-01-01T00:00:00Z", fakes.WALL_ID)
+        listing = [{"id": fakes.RUNG_ID, "name": "main-protection", "source_type": "Repository",
+                    "source": fakes.SVC, "target": "branch", "updated_at": "x"},
+                   {"id": fakes.WALL_ID, "name": "class-wall", "source_type": "Repository",
+                    "source": fakes.SVC, "target": "branch", "updated_at": "y"}]
+        chk = detector.ruleset_check({"rung": live, "wall": wall, "listing": listing}, fakes.l1(), fakes.l2(),
+                                     fakes.wall(), False, fakes.load_cf()["rulesets"]["repository_rulesets"])
         self.assertTrue(chk["ok"])
+        self.assertEqual(chk["wall_diff"], [])
+
+
+class WallRulesetTest(unittest.TestCase):
+    """Probe P1: GitHub refuses two required-reviewers entries for one team in
+    one ruleset, so the wall entry is in a ruleset of its own (the note's
+    fallback). It must equal wall.json, active, on every rung; anything else
+    is a ruleset difference with the same consequences as one in the rung
+    ruleset, and nothing ever writes the wall."""
+
+    WALL_PATH = f"repos/{fakes.SVC}/rulesets/{fakes.WALL_ID}"
+
+    def world(self):
+        w = world_with_merge()
+        w.push_run(501, "m1", [job("completed", "success", 9)])
+        return w
+
+    def assert_difference(self, w, rung_before):
+        out = run(w, 40)
+        self.assertEqual(len(out["acted"]), 1, out["ruleset"])
+        self.assertTrue(out["acted"][0].startswith("ruleset-"))
+        self.assertFalse(out["ruleset"]["ok"])
+        self.assertNotEqual(out["ruleset"]["wall_diff"], [])
+        self.assertEqual(w.rung(), 1)                              # raised from 0, or already 1
+        self.assertEqual(len(w.issues), 1)
+        self.assertIn("wall_diff", w.issues[0]["body"])
+        self.assertEqual([c for c in w.gh.calls if c["path"].startswith(self.WALL_PATH) and c["method"] != "GET"], [])
+        entry = w.records.read(f"ledger/{out['acted'][0]}.json")
+        self.assertEqual(entry["ratchet"]["result"], "raised" if rung_before == 0 else "already-1")
+        self.assertEqual(run(w, 50)["acted"], [])                  # acted on once; it stands
+        return out
+
+    def test_the_wall_disabled_is_a_difference(self):
+        w = self.world()
+        w.wall["enforcement"] = "disabled"
+        out = self.assert_difference(w, 1)
+        self.assertEqual(out["ruleset"]["wall_diff"][0]["path"], ["enforcement"])
+        self.assertEqual(out["ruleset"]["matches"], "l1")          # the rung ruleset is fine
+
+    def test_the_wall_changed_at_l2_raises_the_rung(self):
+        w = self.world()
+        w.class_records.append({"name": "promotion-1.yaml", "kind": "promotion", "merged_at": at(5)})
+        w.set_rung(0)                                              # L2, accepted from the record
+        for r in w.wall["rules"]:
+            r["parameters"]["required_reviewers"][0]["minimum_approvals"] = 0
+        self.assert_difference(w, 0)
+
+    def test_the_wall_missing_is_a_difference(self):
+        w = self.world()
+        w.wall = None                                              # deleted: not found, and not listed
+        out = self.assert_difference(w, 1)
+        self.assertEqual(out["ruleset"]["wall_diff"], [{"path": [], "expected": "ruleset", "actual": "not found"}])
+        self.assertNotEqual(out["ruleset"]["list_diff"], [])
+
+    def test_the_wall_at_l2_is_unchanged_and_accepted(self):
+        w = self.world()
+        w.class_records.append({"name": "promotion-1.yaml", "kind": "promotion", "merged_at": at(5)})
+        w.set_rung(0)
+        out = run(w, 40)
+        self.assertEqual((out["acted"], out["ruleset"]["ok"], out["ruleset"]["wall_diff"]), ([], True, []))
+
+    def test_a_wall_edit_is_a_new_version_of_the_rulesets(self):
+        """The event key covers the wall's version: a second, later wall edit is acted on too."""
+        w = self.world()
+        w.wall["enforcement"] = "disabled"
+        first = run(w, 40)["acted"]
+        w.wall["enforcement"] = "evaluate"
+        w.wall["updated_at"] = "2026-11-12T12:00:00.000-08:00"
+        second = run(w, 50)["acted"]
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        self.assertNotEqual(first, second)
 
 
 class HeartbeatTest(unittest.TestCase):

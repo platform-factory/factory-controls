@@ -31,24 +31,31 @@ AGENT_BOT = "platform-factory-agent[bot]"
 # A well-formed seed key whose hash World puts in the class file, so jobs
 # that check the key against key_sha256 accept it (ADV-17).
 SEED_KEY = "0123456789abcdef" * 4
+# The id World gives the wall ruleset (class-wall). The real one exists once
+# class-wall is created on svc-hello, disabled, before the class file's first
+# commit; until then the class file holds WALL-RULESET-ID.
+WALL_ID = 21000001
+RUNG_ID = 20204893
 
 
 # The class file once its first commit has landed, the template before; the
 # tests pass in both states of the repository.
 CLASS_SOURCE = classfile.committed_path(ROOT)
 PLACEHOLDER_VALUES = {"human": "LISTED-HUMAN-LOGIN", "key_sha256": "SEED-KEY-SHA256",
-                      "skill_tag": "SKILL-TAG", "skill_commit": "SKILL-COMMIT"}
+                      "skill_tag": "SKILL-TAG", "skill_commit": "SKILL-COMMIT", "wall_id": "WALL-RULESET-ID"}
 
 
 def class_file_text(*, human: str | None = HUMAN, key_sha256: str | None = None, skill_tag: str | None = None,
-                    skill_commit: str | None = None, source: Path | None = None) -> str:
+                    skill_commit: str | None = None, wall_id: int | str | None = None,
+                    source: Path | None = None) -> str:
     """The committed class file's text (or the template's) with the given
     values put in place of whatever stands there, placeholder or filled value:
-    the listed login, and when given the seed key's hash and the skill pin.
-    None leaves a value as it is. Values are written double-quoted, as the
-    first-commit pull request writes them (an all-digit hash would otherwise
-    read as a number). Lines are edited inside their top-level block only, so
-    `key_sha256` under `seeds.rule` and other `commit:` keys are left alone."""
+    the listed login, and when given the seed key's hash, the skill pin and
+    the wall ruleset's id (in both places it appears). None leaves a value as
+    it is. Strings are written double-quoted, as the first-commit pull request
+    writes them (an all-digit hash would otherwise read as a number); the id
+    bare. Lines are edited inside their top-level block only, so `key_sha256`
+    under `seeds.rule` and other `commit:` keys are left alone."""
     q = json.dumps
     out, block = [], None
     for line in (source or CLASS_SOURCE).read_text().splitlines(keepends=True):
@@ -67,18 +74,23 @@ def class_file_text(*, human: str | None = HUMAN, key_sha256: str | None = None,
             line = f"  tag: {q(skill_tag)}\n"
         elif block == "skill" and skill_commit is not None and line.startswith("  commit: "):
             line = f"  commit: {q(skill_commit)}\n"
+        elif block == "rulesets" and wall_id is not None and line.startswith("  wall_ruleset_id: "):
+            line = f"  wall_ruleset_id: {wall_id}\n"
+        elif block == "rulesets" and wall_id is not None and "name: class-wall" in line and "{id: " in line:
+            line = re.sub(r"\{id: [^,]+,", f"{{id: {wall_id},", line)
         out.append(line)
     return "".join(out)
 
 
 def placeholder_class_file_text() -> str:
-    """The class file with its four placeholders, in either state of the repository."""
+    """The class file with its five placeholders, in either state of the repository."""
     return class_file_text(**PLACEHOLDER_VALUES)
 
 
 def load_cf() -> dict:
-    """The committed class file (or the template) with the listed login set to HUMAN for tests."""
-    return classfile.load(class_file_text())
+    """The committed class file (or the template) with the listed login set to
+    HUMAN and the wall ruleset's id to WALL_ID, for tests."""
+    return classfile.load(class_file_text(wall_id=WALL_ID))
 
 
 def load_json(name: str):
@@ -94,10 +106,14 @@ def l2() -> dict:
     return json.loads((ROOT / "rulesets/svc-hello/l2.json").read_text())
 
 
-def as_get(body: dict, updated_at: str = "2026-11-12T10:00:00.000-08:00") -> dict:
+def wall() -> dict:
+    return json.loads((ROOT / "rulesets/svc-hello/wall.json").read_text())
+
+
+def as_get(body: dict, updated_at: str = "2026-11-12T10:00:00.000-08:00", rid: int = RUNG_ID) -> dict:
     """A PUT body as GET returns it: GitHub's own fields added, rules reordered."""
     out = copy.deepcopy(body)
-    out.update({"id": 20204893, "source_type": "Repository", "source": SVC,
+    out.update({"id": rid, "source_type": "Repository", "source": SVC,
                 "node_id": "RRS_x", "created_at": "2026-08-01T14:58:42.851-07:00",
                 "updated_at": updated_at, "current_user_can_bypass": "never",
                 "_links": {"self": {"href": "x"}}})
@@ -249,6 +265,9 @@ class World:
         self.files: dict[tuple[str, str], str] = {("main0", "go.mod"): GO_MOD_BASE, ("main0", "go.sum"): "sum0\n"}
         self.parents: dict[str, str] = {}
         self.ruleset = as_get(l1(), "2026-11-12T09:00:00.000-08:00")
+        # The wall ruleset, active, as after the L1 switch-on. Nothing writes
+        # it: PUT to its path has no route, so a write would show as a 404 call.
+        self.wall = as_get(wall(), "2026-11-12T09:00:00.000-08:00", WALL_ID)
         self.extra_rulesets: list[dict] = []
         self.runs: list[dict] = []
         self.jobs: dict[tuple[int, int], list] = {}
@@ -455,9 +474,15 @@ class World:
 
         g.route("GET", rf"repos/{s}/rulesets/20204893", get_ruleset)
         g.route("PUT", rf"repos/{s}/rulesets/20204893", put_ruleset)
-        g.route("GET", rf"repos/{s}/rulesets", lambda m, p, b: ([
-            {k: self.ruleset[k] for k in ("id", "name", "target", "source_type", "source", "enforcement",
-                                          "updated_at")}] if self.ruleset else []) + self.extra_rulesets)
+        def get_wall(m, p, b):
+            if self.wall is None:
+                return ApiError(404, {"message": "Not Found"}, m.group(0))
+            return self.wall
+
+        g.route("GET", rf"repos/{s}/rulesets/{WALL_ID}", get_wall)
+        summary = ("id", "name", "target", "source_type", "source", "enforcement", "updated_at")
+        g.route("GET", rf"repos/{s}/rulesets", lambda m, p, b: [
+            {k: r[k] for k in summary} for r in (self.ruleset, self.wall) if r] + self.extra_rulesets)
 
         def runs(m, p, b):
             out = [r for r in self.runs if (not p.get("event") or r["event"] == p["event"])

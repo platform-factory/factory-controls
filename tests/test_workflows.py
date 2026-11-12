@@ -150,7 +150,9 @@ SCHEDULED = ("agent.yml", "detector.yml", "scorecard.yml")
 # Every workflow that runs the class reads the class file, so each waits for it.
 CLASS_WORKFLOWS = SCHEDULED + ("fixtures.yml", "reveal.yml")
 GUARDED = "needs.guard.outputs.ready == 'true'"
-PLACEHOLDERS = ["human_logins[0]", "seeds.key_sha256", "skill.tag", "skill.commit"]
+# Five placeholders; the wall ruleset's id stands in two places.
+PLACEHOLDERS = ["human_logins[0]", "seeds.key_sha256", "skill.tag", "skill.commit",
+                "rulesets.wall_ruleset_id", "rulesets.repository_rulesets[1].id"]
 
 
 def as_list(needs):

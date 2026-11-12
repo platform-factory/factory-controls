@@ -7,7 +7,7 @@ silently become a different rule.
 
 The note makes the class file's first commit the filled one, approved by the
 listed human. So the repository is created without it: the same content with
-its four placeholders waits at `templates/go-module-bump.yaml`, and the
+its five placeholders waits at `templates/go-module-bump.yaml`, and the
 first-commit pull request adds `classes/go-module-bump.yaml` filled and
 deletes the template. Until then every CLI that runs the class treats the
 missing file as it treats one with a placeholder: it does nothing, writes
@@ -29,14 +29,15 @@ from typing import Any
 
 # Values that stand in for facts that exist only later (the listed human's
 # login after the owner's team change, the seed key's hash after the key is
-# stored, the skill pin after its first release). `unfilled()` lists them, and
-# the detector and merge step refuse to act while any of the ones they read
-# remain.
+# stored, the skill pin after its first release, the wall ruleset's id once
+# it is created on svc-hello, disabled). `unfilled()` lists them, and every
+# run that reads one does nothing while it remains.
 PLACEHOLDERS = frozenset({
     "LISTED-HUMAN-LOGIN",
     "SEED-KEY-SHA256",
     "SKILL-TAG",
     "SKILL-COMMIT",
+    "WALL-RULESET-ID",
 })
 
 
@@ -95,14 +96,16 @@ def require(env: dict, needed: set[str] | None = ALL_PLACEHOLDERS, *, allow_plac
     """The class file for a run, or NotReady.
 
     `needed` lists the dotted paths whose placeholder stops this CLI (None:
-    every placeholder). `allow_placeholders` (local dry runs only) accepts
+    every placeholder); a path also covers everything under it
+    (`rulesets` covers `rulesets.wall_ruleset_id`). `allow_placeholders` (local dry runs only) accepts
     them, and reads the template when the class file is absent."""
     path = path_for_run(env, allow_template=allow_placeholders, root=root)
     if path is None:
         raise NotReady(f"there is no {CLASS_PATH} yet: its first commit, filled and approved by the "
                        "listed human, has not landed")
     cf = load(path)
-    blocking = [p for p in unfilled(cf) if needed is None or p in needed]
+    blocking = [p for p in unfilled(cf) if needed is None or any(
+        p == n or p.startswith(n + ".") or p.startswith(n + "[") for n in needed)]
     if blocking and not allow_placeholders:
         raise NotReady(f"the class file still holds placeholders at {', '.join(blocking)}")
     return cf
@@ -186,7 +189,11 @@ SCHEMA: dict[str, Any] = {
         "l1_sha256": str,
         "l2_path": str,
         "l2_sha256": str,
-        "repository_rulesets": [{"id": int, "name": str, "source_type": str,
+        "wall_ruleset_id": "id",
+        "wall_ruleset_name": str,
+        "wall_path": str,
+        "wall_sha256": str,
+        "repository_rulesets": [{"id": "id", "name": str, "source_type": str,
                                  "source": str, "target": str}],
     },
     "labels": {"human": [str], "machinery": [str]},
@@ -219,6 +226,10 @@ def _check(value: Any, shape: Any, path: str, errors: list[str]) -> None:
             return
         for i, item in enumerate(value):
             _check(item, shape[0], f"{path}[{i}]", errors)
+    elif shape == "id":
+        # A GitHub id, or a placeholder until the object exists.
+        if not ((isinstance(value, int) and not isinstance(value, bool)) or value in PLACEHOLDERS):
+            errors.append(f"{path}: expected an id or a placeholder, got {value!r}")
     else:
         # bool is an int subclass; a YAML `true` where a number belongs is an error.
         if shape is int and isinstance(value, bool):
@@ -267,9 +278,19 @@ def _semantic(cf: dict, errors: list[str]) -> None:
             errors.append("seeds.types: ids must be distinct")
     rs = cf.get("rulesets")
     if isinstance(rs, dict):
-        for k in ("l1_sha256", "l2_sha256"):
+        for k in ("l1_sha256", "l2_sha256", "wall_sha256"):
             if isinstance(rs.get(k), str) and not _HEX64.match(rs[k]):
                 errors.append(f"rulesets.{k}: 64 lowercase hex characters")
+        # The listing GitHub must return is the rung ruleset and the wall
+        # ruleset, by the ids and names above (both places filled alike).
+        listed = rs.get("repository_rulesets")
+        if isinstance(listed, list) and all(isinstance(x, dict) for x in listed):
+            want = sorted([(str(rs.get("ruleset_id")), rs.get("ruleset_name")),
+                           (str(rs.get("wall_ruleset_id")), rs.get("wall_ruleset_name"))])
+            got = sorted((str(x.get("id")), x.get("name")) for x in listed)
+            if got != want:
+                errors.append("rulesets.repository_rulesets: must list exactly the rung ruleset and the wall "
+                              "ruleset, by the ids and names above")
     agent = cf.get("agent")
     if isinstance(agent, dict):
         img = agent.get("builder_image")

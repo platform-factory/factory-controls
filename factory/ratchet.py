@@ -16,6 +16,13 @@ entry is already 1, there is nothing to write.
 
 It never repairs another difference. The detector raises the rung on any
 difference and opens an issue; a person restores the rest by hand.
+
+It reads and writes the rung ruleset (`main-protection`) only. The wall
+entry is in a ruleset of its own (`class-wall`), because GitHub refuses two
+required-reviewers entries for one team in one ruleset (probe P1; the
+readiness note's fallback). The wall is the same on every rung, so the
+ratchet has no reason to touch it and never does; a difference in it is the
+detector's to report.
 """
 
 from __future__ import annotations

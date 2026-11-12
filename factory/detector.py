@@ -26,13 +26,19 @@ step is idempotent). When the ratchet's write failed, each later run (and
 each pre-merge run) tries the raise again until the rung entry is 1
 (`raise_to_retry`).
 
-The ruleset comparison: the live ruleset against the committed L1 JSON
-(enforcement, conditions, every rule, bypass_actors, name and target; never
-timestamps or ids GitHub assigns), and the list of rulesets on the repository
-against the class file's list. L2 is accepted only from a merged promotion or
-fixture record until the ledger's next demotion. Any other difference is an
-event, keyed by the ruleset's version, and is acted on once: rung raised to 1,
-issue opened. The merge step refuses while it stands.
+The ruleset comparison covers two rulesets, because GitHub refuses two
+required-reviewers entries for one team in one ruleset (probe P1) and the
+readiness note's fallback is two rulesets: the rung ruleset holds the rung
+entry, the wall ruleset the wall entry. The live rung ruleset is compared
+with the committed L1 JSON (enforcement, conditions, every rule,
+bypass_actors, name and target; never timestamps or ids GitHub assigns); L2
+is accepted only from a merged promotion or fixture record until the
+ledger's next demotion. The live wall ruleset must equal wall.json exactly,
+active, on every rung. The list of rulesets on the repository must be exactly
+the class file's two. Any other difference (the wall missing, disabled or
+changed included) is an event, keyed by the rulesets' version, and is acted
+on once: rung raised to 1, issue opened. The merge step refuses while it
+stands. Nothing here or in the ratchet ever writes the wall ruleset.
 """
 
 from __future__ import annotations
@@ -141,11 +147,14 @@ def handled_keys(ledger: list[dict]) -> set[str]:
     return {e.get("key") for e in ledger if e.get("key")}
 
 
-def ruleset_signature(live: dict | None, listing: list[dict] | None) -> str:
-    """One string per ruleset version: the live ruleset's updated_at and the
-    ids and updated_at of every ruleset on the repository."""
-    items = sorted([[r.get("id"), r.get("updated_at")] for r in (listing or [])], key=lambda x: x[0] or 0)
-    raw = json.dumps([(live or {}).get("updated_at"), items], separators=(",", ":"))
+def ruleset_signature(seen: dict) -> str:
+    """One string per version of the rulesets: the rung and wall rulesets'
+    updated_at, and the ids and updated_at of every ruleset on the
+    repository. `seen` is what _read_rulesets returns."""
+    items = sorted([[r.get("id"), r.get("updated_at")] for r in (seen.get("listing") or [])],
+                   key=lambda x: x[0] or 0)
+    raw = json.dumps([(seen.get("rung") or {}).get("updated_at"), (seen.get("wall") or {}).get("updated_at"), items],
+                     separators=(",", ":"))
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
@@ -161,19 +170,27 @@ def list_signature(listing: list[dict]) -> list[dict]:
     return sorted([{k: r.get(k) for k in keys} for r in listing], key=lambda x: x["id"] or 0)
 
 
-def ruleset_check(live: dict | None, listing: list[dict] | None, l1: dict, l2: dict,
-                  l2_ok: bool, expected_list: list[dict]) -> dict:
-    """{"ok", "matches": "l1"|"l2"|None, "diff_vs_l1", "list_diff", "l2_accepted"}. Pure."""
-    list_diff = rs.diff(list_signature(expected_list), list_signature(listing or []))
+def ruleset_check(seen: dict, l1: dict, l2: dict, wall: dict, l2_ok: bool, expected_list: list[dict]) -> dict:
+    """{"ok", "matches": "l1"|"l2"|None, "diff_vs_l1", "wall_diff", "list_diff", "l2_accepted"}. Pure.
+
+    `seen` holds the live rung ruleset, the live wall ruleset and the
+    repository's listing (_read_rulesets). ok iff the listing is exactly the
+    expected two, the wall equals wall.json, and the rung ruleset equals L1,
+    or L2 while L2 is accepted."""
+    live, wall_live = seen.get("rung"), seen.get("wall")
+    list_diff = rs.diff(list_signature(expected_list), list_signature(seen.get("listing") or []))
+    missing = [{"path": [], "expected": "ruleset", "actual": "not found"}]
+    wall_diff = missing if wall_live is None else rs.diff(rs.normalize(wall), rs.normalize(wall_live))
     if live is None:
-        return {"ok": False, "matches": None, "diff_vs_l1": [{"path": [], "expected": "ruleset",
-                "actual": "not found"}], "list_diff": list_diff, "l2_accepted": l2_ok}
+        return {"ok": False, "matches": None, "diff_vs_l1": missing, "wall_diff": wall_diff,
+                "list_diff": list_diff, "l2_accepted": l2_ok}
     n_live = rs.normalize(live)
     d1 = rs.diff(rs.normalize(l1), n_live)
     d2 = rs.diff(rs.normalize(l2), n_live)
     matches = "l1" if not d1 else ("l2" if not d2 else None)
-    ok = not list_diff and (matches == "l1" or (matches == "l2" and l2_ok))
-    return {"ok": ok, "matches": matches, "diff_vs_l1": d1, "list_diff": list_diff, "l2_accepted": l2_ok}
+    ok = not list_diff and not wall_diff and (matches == "l1" or (matches == "l2" and l2_ok))
+    return {"ok": ok, "matches": matches, "diff_vs_l1": d1, "wall_diff": wall_diff, "list_diff": list_diff,
+            "l2_accepted": l2_ok}
 
 
 # -- context and I/O ---------------------------------------------------------
@@ -189,6 +206,13 @@ class Context:
     run_id: str | None = None
     run_attempt: str | None = None
     phase: str = "detector"
+    wall: dict | None = None   # the committed wall.json; read from the class file's path when not given
+
+
+def _wall(ctx: Context) -> dict:
+    if ctx.wall is None:
+        ctx.wall = st.committed_bodies(ctx.cf)["wall"]
+    return ctx.wall
 
 
 def _files_at(gh, repo: str, sha: str) -> dict:
@@ -265,16 +289,21 @@ def find_escape_b(ctx: Context, snap: dict, state: st.ClassState, handled: set[s
     return events, unknowns, ignored
 
 
-def _read_ruleset(ctx: Context) -> tuple[dict | None, list[dict]]:
-    svc, rid = ctx.cf["repo"], ctx.cf["rulesets"]["ruleset_id"]
+def _read_one(ctx: Context, rid) -> dict | None:
     try:
-        live = ctx.gh_svc.get(f"repos/{svc}/rulesets/{rid}")
+        return ctx.gh_svc.get(f"repos/{ctx.cf['repo']}/rulesets/{rid}")
     except ApiError as e:
         if e.status != 404:
             raise
-        live = None
-    listing = ctx.gh_svc.paginate(f"repos/{svc}/rulesets")
-    return live, listing
+        return None
+
+
+def _read_rulesets(ctx: Context) -> dict:
+    """{"rung", "wall", "listing"}: the two rulesets as GET returns them (None
+    when not found) and the repository's ruleset listing. Reads only."""
+    rulesets = ctx.cf["rulesets"]
+    return {"rung": _read_one(ctx, rulesets["ruleset_id"]), "wall": _read_one(ctx, rulesets["wall_ruleset_id"]),
+            "listing": ctx.gh_svc.paginate(f"repos/{ctx.cf['repo']}/rulesets")}
 
 
 def _open_agent_prs(ctx: Context, state: st.ClassState) -> list[int]:
@@ -291,7 +320,7 @@ def _open_agent_prs(ctx: Context, state: st.ClassState) -> list[int]:
 def act(ctx: Context, event: dict, state: st.ClassState) -> dict:
     """Freeze for one event: ratchet, labels, then the ledger entry (last)."""
     key = event["key"]
-    live_before, listing_before = _read_ruleset(ctx)
+    seen_before = _read_rulesets(ctx)
     reason = {"event_key": key, "type": event["type"], "event_time": event.get("event_time"),
               "pr": event.get("pr"), "reason": event.get("reason")}
     res = ratchet.raise_rung(ctx.gh_svc, ctx.records, ctx.cf, ctx.l1, ctx.l2, key, reason)
@@ -302,10 +331,13 @@ def act(ctx: Context, event: dict, state: st.ClassState) -> dict:
         # labels, which use the ratchet App's token.
         issue = ratchet.try_open_issue(
             ctx.records, f"ratchet: {key}: ruleset difference",
-            "The detector found svc-hello's rulesets differing from the committed L1 JSON "
-            "(or from L2 while L2 is not accepted). It raised the rung entry to 1 where it could. "
-            "The merge step refuses while the difference stands.\n\n```json\n"
-            + json.dumps({"diff_vs_l1": event.get("diff_vs_l1"), "list_diff": event.get("list_diff"),
+            "The detector found svc-hello's rulesets differing from the committed JSON: the rung "
+            "ruleset from L1 (or from L2 while L2 is not accepted), the wall ruleset from wall.json, "
+            "or the repository's list of rulesets from the class file's. It raised the rung entry to 1 "
+            "where it could; nothing writes the wall ruleset. The merge step refuses while the "
+            "difference stands.\n\n```json\n"
+            + json.dumps({"diff_vs_l1": event.get("diff_vs_l1"), "wall_diff": event.get("wall_diff"),
+                          "list_diff": event.get("list_diff"),
                           "matches": event.get("matches"), "l2_accepted": event.get("l2_accepted")},
                          indent=2, sort_keys=True) + "\n```", issue_errors)
     labelled, label_errors = [], []
@@ -318,14 +350,13 @@ def act(ctx: Context, event: dict, state: st.ClassState) -> dict:
     if label_errors:
         # Leave no ledger entry, so the next run repeats the (idempotent) freeze.
         raise RuntimeError(f"labelling failed for {label_errors}")
-    live_after, listing_after = _read_ruleset(ctx)
+    seen_after = _read_rulesets(ctx)
     entry = {
         "schema": 1, "key": key, "type": event["type"], "event": event,
         "acted_at": st.iso(st.utcnow()), "phase": ctx.phase,
         "detector_run": {"run_id": ctx.run_id, "run_attempt": ctx.run_attempt},
         "ratchet": res, "issue": issue, "issue_errors": issue_errors, "labelled_needs_human": labelled,
-        "ruleset_versions_seen": sorted({ruleset_signature(live_before, listing_before),
-                                         ruleset_signature(live_after, listing_after)}),
+        "ruleset_versions_seen": sorted({ruleset_signature(seen_before), ruleset_signature(seen_after)}),
     }
     try:
         ctx.records.write(f"ledger/{key}.json", entry, f"ledger: {key}")
@@ -394,35 +425,35 @@ def run(ctx: Context, write_heartbeat: bool = True) -> dict:
         entry = act(ctx, ev, state)
         ledger.append(entry)
         acted.append(entry["key"])
-    live, listing = _read_ruleset(ctx)
+    seen = _read_rulesets(ctx)
     retried = []
-    demotion = raise_to_retry(ledger, snap["class_records"], st.live_rung(live, ctx.l1, ctx.l2), ctx.cf,
+    demotion = raise_to_retry(ledger, snap["class_records"], st.live_rung(seen["rung"], ctx.l1, ctx.l2), ctx.cf,
                               set(acted))
     if demotion is not None:
         entry = retry_raise(ctx, demotion)
         ledger.append(entry)
         retried.append(entry["key"])
-        live, listing = _read_ruleset(ctx)
+        seen = _read_rulesets(ctx)
     accepted = st.l2_accepted(snap["class_records"], ledger)
     expected_list = ctx.cf["rulesets"]["repository_rulesets"]
-    chk = ruleset_check(live, listing, ctx.l1, ctx.l2, accepted, expected_list)
+    chk = ruleset_check(seen, ctx.l1, ctx.l2, _wall(ctx), accepted, expected_list)
     if not chk["ok"]:
-        sig = ruleset_signature(live, listing)
+        sig = ruleset_signature(seen)
         if sig not in seen_signatures(ledger):
             ev = {"key": f"ruleset-{sig}", "type": "ruleset", "event_time": st.iso(ctx.now),
                   "reason": "ruleset difference", **chk}
             entry = act(ctx, ev, state)
             ledger.append(entry)
             acted.append(entry["key"])
-            live, listing = _read_ruleset(ctx)
+            seen = _read_rulesets(ctx)
             accepted = st.l2_accepted(snap["class_records"], ledger)
-            chk = ruleset_check(live, listing, ctx.l1, ctx.l2, accepted, expected_list)
+            chk = ruleset_check(seen, ctx.l1, ctx.l2, _wall(ctx), accepted, expected_list)
     unknowns = list(snap.get("unknowns", [])) + unknowns_b
     out = {
         "phase": ctx.phase, "now": st.iso(ctx.now), "acted": acted, "retried": retried, "pending": pending,
         "ignored_before_latest_record": [e["key"] for e in ign_a + ign_b],
         "latest_record": st.latest_record(snap["class_records"]),
-        "ruleset": chk, "rung": st.live_rung(live, ctx.l1, ctx.l2), "unknowns": unknowns,
+        "ruleset": chk, "rung": st.live_rung(seen["rung"], ctx.l1, ctx.l2), "unknowns": unknowns,
         "main_sha": snap.get("main_sha"),
     }
     if write_heartbeat:
@@ -440,8 +471,10 @@ def context_from_env(phase: str, dry_run: bool = False, allow_placeholders: bool
                      env: dict | None = None) -> Context:
     """Raises classfile.NotReady while there is no filled class file."""
     env = dict(os.environ if env is None else env)
-    cf = classfile.require(env, {"human_logins[0]"}, allow_placeholders=allow_placeholders)
-    l1, l2 = st.load_committed_rulesets(cf)
+    # The wall ruleset is read by its id, so a placeholder there stops the run too.
+    cf = classfile.require(env, {"human_logins[0]", "rulesets"}, allow_placeholders=allow_placeholders)
+    bodies = st.committed_bodies(cf)
+    l1, l2 = bodies["l1"], bodies["l2"]
     svc_token, controls_token = env.get("SVC_TOKEN"), env.get("CONTROLS_TOKEN")
     if not svc_token or not controls_token:
         raise SystemExit(json.dumps({"error": "SVC_TOKEN and CONTROLS_TOKEN are required"}))
@@ -451,7 +484,8 @@ def context_from_env(phase: str, dry_run: bool = False, allow_placeholders: bool
         gh_svc, gh_controls = DryRunGitHub(gh_svc), DryRunGitHub(gh_controls)
     records = Records(gh_controls, env.get("CONTROLS_REPO", CONTROLS_REPO), branch_from_env(env))
     return Context(cf=cf, l1=l1, l2=l2, gh_svc=gh_svc, records=records,
-                   run_id=env.get("GITHUB_RUN_ID"), run_attempt=env.get("GITHUB_RUN_ATTEMPT"), phase=phase)
+                   run_id=env.get("GITHUB_RUN_ID"), run_attempt=env.get("GITHUB_RUN_ATTEMPT"), phase=phase,
+                   wall=bodies["wall"])
 
 
 def dry_run_writes(ctx: Context) -> list:

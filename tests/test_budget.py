@@ -10,7 +10,9 @@ Each run below is a real main() call (tests/test_cli.py's harness) against
 a world in the L2 programme's shape: 20 run records (15 merged items, 4
 settled seeds, 1 open pull request), 25 fixture records, 5 ledger entries
 and one merged fixture record under classes/records/. Requests on the
-controls repo are counted by path.
+controls repo are counted by path. Since probe P1 there are two rulesets on
+svc-hello; reading the wall ruleset adds one request per detector pass on
+the ratchet App's token, none on the controls token.
 """
 
 from __future__ import annotations

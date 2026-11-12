@@ -721,18 +721,32 @@ def _pr_summary(pr: dict, qprs: dict[int, dict]) -> dict:
 
 # -- reads -------------------------------------------------------------------
 
-def load_committed_rulesets(cf: dict, root: Path = ROOT) -> tuple[dict, dict]:
-    """The committed L1 and L2 bodies, after checking their hashes against the class file."""
+def committed_bodies(cf: dict, root: Path = ROOT) -> dict:
+    """{"l1", "l2", "wall"}: the committed ruleset bodies, after checking each
+    hash against the class file, that L1 and L2 are one field apart, and that
+    the wall ruleset layers cleanly with them (ruleset.wall_errors)."""
     import hashlib
-    out = []
-    for which in ("l1", "l2"):
+    out = {}
+    for which in ("l1", "l2", "wall"):
         raw = (root / cf["rulesets"][f"{which}_path"]).read_bytes()
         h = hashlib.sha256(raw).hexdigest()
         if h != cf["rulesets"][f"{which}_sha256"]:
             raise ValueError(f"{which}.json hash {h} differs from the class file's {cf['rulesets'][f'{which}_sha256']}")
-        out.append(json.loads(raw))
-    rs.rung_path(out[0], out[1])  # exactly one field apart, or raise
-    return out[0], out[1]
+        out[which] = json.loads(raw)
+    rs.rung_path(out["l1"], out["l2"])  # exactly one field apart, or raise
+    if out["wall"].get("name") != cf["rulesets"]["wall_ruleset_name"]:
+        raise ValueError(f"wall.json is named {out['wall'].get('name')!r}, not {cf['rulesets']['wall_ruleset_name']!r}")
+    for which in ("l1", "l2"):
+        errors = rs.wall_errors(out[which], out["wall"], cf["rungs"]["wall_minimum_approvals"])
+        if errors:
+            raise ValueError(f"wall.json does not layer with {which}.json: {errors}")
+    return out
+
+
+def load_committed_rulesets(cf: dict, root: Path = ROOT) -> tuple[dict, dict]:
+    """The committed L1 and L2 bodies, with every check committed_bodies makes."""
+    b = committed_bodies(cf, root)
+    return b["l1"], b["l2"]
 
 
 def read_class_records(gh_controls, controls_repo: str, ref: str = "main") -> tuple[list[dict], list[dict]]:

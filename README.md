@@ -21,7 +21,7 @@ automatically. M4 runs it on one class, a Go-module bump on `svc-hello`,
 written by an LLM agent through a GitHub App, on 25 replayed upstream
 releases (ADR-0024).
 
-GitHub can hold most of the boundary itself. A ruleset on `svc-hello` says
+GitHub can hold most of the boundary itself. Rulesets on `svc-hello` say
 how many approvals a change to `go.mod` and `go.sum` needs, and a required
 check, `class-scope`, decides from the default branch whether a pull request
 is one on-class change. What a ruleset has no field for has to live
@@ -42,19 +42,25 @@ every tightening may be a machine's.
 
 ## The mental model
 
-- **A rung is one number.** In `svc-hello`'s ruleset, the required-reviewers
-  entry for team `platform` on `/go.mod` and `/go.sum` (the *rung entry*)
-  has `minimum_approvals` 1 at L1 (a person approves before any merge) and 0
-  at L2 (the team is told; the agent may merge). A second entry, the *wall
-  entry*, keeps every other path at one approval on every rung.
-  `rulesets/svc-hello/l1.json` and `l2.json` are the whole ruleset at each
-  rung, and differ in that one field.
+- **A rung is one number.** In `svc-hello`'s rung ruleset
+  (`main-protection`), the required-reviewers entry for team `platform` on
+  `/go.mod` and `/go.sum` (the *rung entry*) has `minimum_approvals` 1 at
+  L1 (a person approves before any merge) and 0 at L2 (the team is told; the
+  agent may merge). A second entry, the *wall entry*, keeps every other path
+  at one approval on every rung. The two entries sit in two rulesets on the
+  same branch, not one: GitHub refuses two required-reviewers entries for
+  one team in one ruleset (probe P1), and the readiness note's fallback is
+  two rulesets, recorded as a deviation. `rulesets/svc-hello/l1.json` and
+  `l2.json` are the whole rung ruleset at each rung, and differ in that one
+  field; `wall.json` is the wall ruleset (`class-wall`), the same on every
+  rung, with the same pull-request parameters, so the two together say what
+  one ruleset with both entries would have said.
 - **The class file freezes the rules.** `classes/go-module-bump.yaml` holds
   every number the M4 readiness note fixed, and the hashes of the two
   ruleset files. It changes only by a pull request the listed human
   approves. Its first commit is that pull request, filled: the repository
   is created without it, and until then only its template exists
-  (`templates/go-module-bump.yaml`, four placeholders), which the same pull
+  (`templates/go-module-bump.yaml`, five placeholders), which the same pull
   request deletes. Nothing runs the class before it lands.
 - **State is recomputed, never stored.** The streak, the next queue item and
   the open agent pull request are derived each time from GitHub's record and
@@ -64,8 +70,9 @@ every tightening may be a machine's.
   request is one in a run record; a seed is computed from a secret key; a
   label counts only from the listed human's own label event.
 - **The ratchet only raises.** Its GitHub permission could lower an entry or
-  delete the ruleset; its code can do one thing: set the rung entry from 0 to
-  1, after checking that this is the only field the write changes.
+  delete a ruleset; its code can do one thing: set the rung entry from 0 to
+  1 in the rung ruleset, after checking that this is the only field the
+  write changes. It never reads or writes the wall ruleset.
 
 ## How it works
 
@@ -83,11 +90,14 @@ runs every ten minutes. It looks for two kinds of escape:
 It acts once per event, only on events after the latest merged promotion or
 fixture record: the ratchet raises the rung entry to 1, every open agent
 pull request gets `needs-human`, and an entry goes to the ledger. It also
-compares the live ruleset with `l1.json`, ignoring the ids and timestamps
-GitHub assigns. L2 is accepted only after a merged promotion or fixture
-record, until the next demotion. Any other difference raises the rung,
-opens an issue here, and blocks merges while it stands. Each complete run
-writes a heartbeat.
+compares both live rulesets with the committed JSON, ignoring the ids and
+timestamps GitHub assigns: the rung ruleset with `l1.json` (L2 is accepted
+only after a merged promotion or fixture record, until the next demotion),
+the wall ruleset with `wall.json` on every rung, and the repository's list
+of rulesets with exactly those two. Any other difference (a wall that is
+disabled, changed or gone included) raises the rung, opens an issue here,
+and blocks merges while it stands. Nothing writes the wall ruleset. Each
+complete run writes a heartbeat.
 
 **The merge step** (`factory/merge_step.py`) is the first two jobs of each
 agent-workflow run. `pre-merge` runs the detector's checks (demoting first
@@ -127,10 +137,10 @@ schema are in [docs/RECORDS.md](docs/RECORDS.md).
 
 ```
 classes/go-module-bump.yaml   the class file (frozen numbers); absent until its first, filled commit
-templates/go-module-bump.yaml the class file's template, four placeholders; deleted by that commit
+templates/go-module-bump.yaml the class file's template, five placeholders; deleted by that commit
 classes/records/              promotion and fixture records, merged by the listed human
-rulesets/svc-hello/           l1.json and l2.json, the ruleset bodies as PUT
-scripts/ruleset_hashes.py     prints the two hashes for the class file (--check compares)
+rulesets/svc-hello/           l1.json and l2.json (the rung ruleset at each rung) and wall.json, as PUT
+scripts/ruleset_hashes.py     prints the three ruleset hashes for the class file (--check compares)
 factory/                      Python, standard library only
   gh.py                       REST and GraphQL client: retries, pagination, no global state
   classfile.py                load and validate the class file
@@ -161,7 +171,7 @@ interfaces.
 
 ```
 python3 -m unittest discover -s tests          # offline; no token, no network
-python3 scripts/ruleset_hashes.py --check      # class file agrees with l1/l2.json
+python3 scripts/ruleset_hashes.py --check      # class file agrees with l1, l2 and wall.json
 docker run --rm -v "$PWD":/repo -w /repo rhysd/actionlint:latest -color
 ```
 

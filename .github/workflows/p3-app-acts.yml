@@ -39,6 +39,11 @@ on:
         required: false
         type: string
         default: ""
+      set:
+        description: "Set suffix (a second set of bases and branches); letters and digits only"
+        required: false
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -70,8 +75,13 @@ jobs:
           STEP: ${{ inputs.step }}
           PR: ${{ inputs.pr }}
           PR2: ${{ inputs.pr2 }}
+          SET: ${{ inputs.set }}
         run: |
           args=("$STEP" --execute)
           if [ -n "$PR" ]; then args+=(--pr "$PR"); fi
           if [ -n "$PR2" ]; then args+=(--pr2 "$PR2"); fi
+          if [ -n "$SET" ]; then
+            case "$SET" in *[!a-z0-9]*) echo "::error::set must be lower-case letters and digits"; exit 1 ;; esac
+            args+=(--set "$SET")
+          fi
           python3 probes/p3-approvals-labels/p3.py "${args[@]}"

@@ -22,6 +22,8 @@ none (case f). Two rulesets per base because GitHub refuses two entries for
 one team in one ruleset (P1).
 
     python3 p3.py bases         --dry-run          # the three base branches, from main's tip
+                                                   # (every step takes --set NAME: a second set of bases,
+                                                   #  rulesets and branches, for a case that has to be run again)
     python3 p3.py ruleset       --dry-run          # l1: rung 1 + wall; l2: rung 0 + wall; stale dismissal on
     python3 p3.py human-prs     --dry-run          # README.md and go.mod pull requests by the delegate
     python3 p3.py a-open        --dry-run          # [App] go.mod pull request, one commit behind its base
@@ -151,33 +153,40 @@ def main(argv=None) -> int:
     ap = probe.parser("P3: approvals and labels", steps)
     ap.add_argument("--pr", type=int)
     ap.add_argument("--pr2", type=int)
+    ap.add_argument("--set", default="", help="a second set of bases, rulesets and branches, named with this suffix")
     a = ap.parse_args(argv)
+    # A case that ended (the pull request merged) cannot be run again on the
+    # same base: its branch exists and its base has moved. `--set b` runs the
+    # same steps on bases, rulesets and branches of their own, all new.
+    sfx = f"-{a.set}" if a.set else ""
+    base_l1, base_l2, base_f = BASE_L1 + sfx, BASE_L2 + sfx, BASE_F + sfx
     api = probe.Api(a.execute, token=os.environ.get("APP_TOKEN"))
     st = probe.load_state(HERE)
     n = a.pr
     if a.step == "bases":
         base = probe.main_sha(api)
-        for b in (BASE_L1, BASE_L2, BASE_F):
+        for b in (base_l1, base_l2, base_f):
             api.call("POST", f"repos/{probe.REPO}/git/refs", {"ref": f"refs/heads/{b}", "sha": base}, note=f"base {b}")
         # Before the rulesets exist: one commit on p3-base/l1 that is not a
         # workflow file, so the App's branch (made from this commit's parent)
         # is one commit behind and update-branch has work to do that needs
         # no `workflows` permission.
         api.call("PUT", f"repos/{probe.REPO}/contents/p3-note.txt", {
-            "message": "p3: one commit on the base", "branch": BASE_L1,
+            "message": "p3: one commit on the base", "branch": base_l1,
             "content": probe.b64("p3: this commit puts the agent App's branch one commit behind\n")},
-            note=f"{BASE_L1} moves one commit past main's tip")
+            note=f"{base_l1} moves one commit past main's tip")
     elif a.step == "ruleset":
         ids = st.setdefault("rulesets", {})
         for name, base, patterns, minimum in RULESETS:
+            name, base = name + sfx, base + sfx
             res = api.call("POST", f"repos/{probe.REPO}/rulesets", ruleset_body(name, base, patterns, minimum),
                            note=f"{name}: one entry at {minimum} on {base}, stale dismissal on (a creation, never an edit)")
             if isinstance(res, dict) and res.get("id"):
                 ids[name] = res["id"]
     elif a.step == "human-prs":
-        base = tip(api, BASE_L1)
+        base = tip(api, base_l1)
         for name, path in (("c-readme", "README.md"), ("c-gomod", "go.mod")):
-            b = f"p3/{name}"
+            b = f"p3/{name}{sfx}"
             api.call("POST", f"repos/{probe.REPO}/git/refs", {"ref": f"refs/heads/{b}", "sha": base}, note=b)
             meta = api.call("GET", f"repos/{probe.REPO}/contents/{path}", params={"ref": b}, note="blob")
             import base64
@@ -185,19 +194,19 @@ def main(argv=None) -> int:
             api.call("PUT", f"repos/{probe.REPO}/contents/{path}", {
                 "message": f"p3: {name}", "branch": b, "content": probe.b64(text.rstrip("\n") + "\n// p3 person\n"),
                 "sha": meta.get("sha") if isinstance(meta, dict) else "<blob>"}, note=f"the delegate's change to {path}")
-            res = api.call("POST", f"repos/{probe.REPO}/pulls", {"title": f"p3: {name}", "head": b, "base": BASE_L1,
+            res = api.call("POST", f"repos/{probe.REPO}/pulls", {"title": f"p3: {name}", "head": b, "base": base_l1,
                            "body": "P3 probe. Not to be merged."}, note=f"a person's pull request on {path}")
-            st[name] = probe.number(res, st.get(name))
+            st[name + sfx] = probe.number(res, st.get(name + sfx))
     elif a.step == "a-open":
-        res = api.call("GET", f"repos/{probe.REPO}/commits/{BASE_L1}", note=f"{BASE_L1} and its parent")
+        res = api.call("GET", f"repos/{probe.REPO}/commits/{base_l1}", note=f"{base_l1} and its parent")
         parent = res["parents"][0]["sha"] if isinstance(res, dict) else "<the base's parent>"
-        b = "p3/agent-gomod"
+        b = "p3/agent-gomod" + sfx
         api.call("POST", f"repos/{probe.REPO}/git/refs", {"ref": f"refs/heads/{b}", "sha": parent},
                  note="[App] a branch one commit behind its base, so update-branch has work to do later")
         commit(api, b, parent, {"go.mod": go_mod_line(current_go_mod(api, b), "agent 1")}, "p3: agent change to go.mod")
         res = api.call("POST", f"repos/{probe.REPO}/pulls", {"title": "p3: agent pull request on go.mod", "head": b,
-                       "base": BASE_L1, "body": "P3 probe."}, note="[App] the pull request the listed human approves")
-        st["agent_pr"] = probe.number(res, st.get("agent_pr"))
+                       "base": base_l1, "body": "P3 probe."}, note="[App] the pull request the listed human approves")
+        st["agent_pr" + sfx] = probe.number(res, st.get("agent_pr" + sfx))
     elif a.step == "a-read":
         # No merge attempt here: with the approval on the head the pull request is mergeable,
         # and merging it would end case (a) before the pushes.
@@ -243,32 +252,32 @@ def main(argv=None) -> int:
                 (f"repos/{probe.REPO}/actions/artifacts", {"per_page": 5}, "actions: read (verdict artifact)")):
             api.call("GET", path, params=params, note=f"[App] {why}: 200 or 403?")
     elif a.step == "b-open-merge":
-        base = tip(api, BASE_L2)
-        b = "p3/agent-rung0"
+        base = tip(api, base_l2)
+        b = "p3/agent-rung0" + sfx
         api.call("POST", f"repos/{probe.REPO}/git/refs", {"ref": f"refs/heads/{b}", "sha": base}, note="[App] branch")
         res = commit(api, b, base, {"go.mod": go_mod_line(current_go_mod(api, b), "rung 0")}, "p3: unapproved go.mod")
         res = api.call("POST", f"repos/{probe.REPO}/pulls", {"title": "p3: unapproved at rung 0", "head": b,
-                       "base": BASE_L2, "body": "P3 probe."}, note="[App] no approval will be given")
+                       "base": base_l2, "body": "P3 probe."}, note="[App] no approval will be given")
         m = probe.number(res, st.get("rung0_pr"))
         st["rung0_pr"] = m
         settle(api, m)
         reads(api, m, "rung 0, no approval (expect merged)")
     elif a.step == "f-open":
-        base = tip(api, BASE_F)
-        b = "p3/agent-behind-workflow"
+        base = tip(api, base_f)
+        b = "p3/agent-behind-workflow" + sfx
         api.call("POST", f"repos/{probe.REPO}/git/refs", {"ref": f"refs/heads/{b}", "sha": base}, note="[App] branch")
         commit(api, b, base, {"go.mod": go_mod_line(current_go_mod(api, b), "behind a workflow")},
                "p3: go.mod change made before the base gains a workflow file")
         res = api.call("POST", f"repos/{probe.REPO}/pulls", {"title": "p3: behind a workflow change", "head": b,
-                       "base": BASE_F, "body": "P3 probe (M5). Not to be merged."}, note="[App] the pull request")
+                       "base": base_f, "body": "P3 probe (M5). Not to be merged."}, note="[App] the pull request")
         st["behind_pr"] = probe.number(res, st.get("behind_pr"))
     elif a.step == "f-workflow-base":
-        base = tip(api, BASE_F)
+        base = tip(api, base_f)
         api.call("PUT", f"repos/{probe.REPO}/contents/.github/workflows/p3-noop.yml", {
-            "message": "p3: a workflow file on the base (M5)", "branch": BASE_F,
+            "message": "p3: a workflow file on the base (M5)", "branch": base_f,
             "content": probe.b64("name: p3-noop\non: workflow_dispatch\npermissions: {}\njobs:\n  noop:\n"
                                  "    runs-on: ubuntu-24.04\n    steps:\n      - run: \"true\"\n")},
-                 note=f"the delegate's credential (workflow scope); no ruleset holds {BASE_F}: it now "
+                 note=f"the delegate's credential (workflow scope); no ruleset holds {base_f}: it now "
                       f"holds a workflow file the App's branch from {base[:12]} lacks")
     elif a.step == "f-update-branch":
         head, _ = pr_head(api, n)
@@ -277,7 +286,7 @@ def main(argv=None) -> int:
         api.call("GET", f"repos/{probe.REPO}/pulls/{n}", note="the head after the attempt")
     elif a.step == "f-remake":
         head, ref = pr_head(api, n)
-        base = tip(api, BASE_F)
+        base = tip(api, base_f)
         files = {}
         for f in ("go.mod", "go.sum"):
             meta = api.call("GET", f"repos/{probe.REPO}/contents/{f}", params={"ref": head}, note=f"{f} at the head")

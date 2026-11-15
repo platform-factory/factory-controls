@@ -1,0 +1,31 @@
+# P2's fallback stand-in: the same job on `pull_request` in its own workflow.
+# Used only if the pull_request_target form does not attach and block. Lock 2
+# then rests on the agent App's missing `workflows` permission and on the wall
+# entry over `.github/**` (the readiness note, P2). On this event an
+# actions/checkout with no `ref` checks out the pull request's merge ref, so
+# the real class-scope.yml in this form must check out the verifier with
+# `ref: ${{ github.event.repository.default_branch }}` (and the sparse
+# checkout), or the pull request's own class_scope.py would judge it; and the
+# agent App's missing `workflows` permission covers .github/workflows/ only,
+# so for .github/class-scope/ C-15 rests on the wall alone (review finding m6).
+name: class-scope
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions: {}
+
+jobs:
+  class-scope:
+    name: class-scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    steps:
+      - name: decide
+        env:
+          GREEN: ${{ contains(github.event.pull_request.labels.*.name, 'probe-green') }}
+        run: test "$GREEN" = "true"

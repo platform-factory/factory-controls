@@ -1,13 +1,4 @@
-# The template of the class file for the Go-module bump class on svc-hello.
-#
-# This is not the class file. The readiness note makes the class file's first
-# commit the filled one, approved by the listed human, so the repository is
-# created without it. The first-commit pull request copies this file to
-# classes/go-module-bump.yaml with the five placeholders below filled, and
-# deletes this template in the same pull request (docs/RUNBOOK.md, step 7).
-# Until then every workflow and CLI that runs the class stops at once, green,
-# with one notice line, and writes nothing (factory/guard.py). The copy drops
-# this paragraph. A change here needs no approval and changes no rule.
+# The class file for the Go-module bump class on svc-hello.
 #
 # Why this file exists: ADR-0024 §8 moves N, the queue, the reset rule and
 # every other number of the ladder out of the ruleset (which has no field for
@@ -111,7 +102,7 @@ min_release_age_days: 7
 # The one human login: the maintainer's second account, the only member of
 # team `platform` for the window. Labels count only from this login with no
 # performed_via_github_app.
-human_logins: [LISTED-HUMAN-LOGIN]
+human_logins: ["vishdev-ai"]
 
 # Escape (a): a merged class pull request whose merge commit has no push run
 # of go-test whose first attempt succeeded within this many minutes of the
@@ -188,7 +179,7 @@ seeds:
     type_modulus: 6
     pairing: j-th position kept with j-th type kept
     key_sha256_of: the 32 decoded key bytes
-  key_sha256: SEED-KEY-SHA256
+  key_sha256: "4cecf21c1c90654aa16a512980b2eba59f5d27b2a9044250c62fb2ee32cc79a2"
 
 # Pinned at this file's first commit (the note's "Agent" line). The model's
 # job, class-scope and go-test use the same builder image digest.
@@ -216,8 +207,8 @@ agent:
 skill:
   repo: platform-factory/platform-knowledge
   path: skills/go-module-bump/SKILL.md
-  tag: SKILL-TAG
-  commit: SKILL-COMMIT
+  tag: "go-module-bump/v0.1.0-rc.1"
+  commit: "f136c2d72d8c8e88b358e7d938f48f0619c9dfc3"
 
 # Two rulesets on svc-hello's default branch, and the committed bodies the
 # detector compares the live ones with. ADR-0024 §4 put the rung entry and the
@@ -247,13 +238,13 @@ rulesets:
   l1_sha256: "3c2c96b450761a9fccbd87b7eaccc3d3e36ff536f79f13678327460d96b3b935"
   l2_path: rulesets/svc-hello/l2.json
   l2_sha256: "dab4681a830aeaa19c19c23499ad17f6c8a14aeaba8d8e1d1fd3f568ee70ccb3"
-  wall_ruleset_id: WALL-RULESET-ID
+  wall_ruleset_id: 27338953
   wall_ruleset_name: class-wall
   wall_path: rulesets/svc-hello/wall.json
   wall_sha256: "9e86a5c167184900749fc83fc75f5e37e861711e8c9cb13412cc40ceb3145e38"
   repository_rulesets:
     - {id: 20204893, name: main-protection, source_type: Repository, source: platform-factory/svc-hello, target: branch}
-    - {id: WALL-RULESET-ID, name: class-wall, source_type: Repository, source: platform-factory/svc-hello, target: branch}
+    - {id: 27338953, name: class-wall, source_type: Repository, source: platform-factory/svc-hello, target: branch}
 
 # Labels a person applies (counted only from the listed human, from a labeled
 # to an unlabeled event, with no performed_via_github_app) and labels the

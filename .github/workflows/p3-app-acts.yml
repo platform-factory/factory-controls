@@ -18,6 +18,7 @@ on:
         options:
           - a-open
           - a-read
+          - a-merge
           - a-push-content
           - a-push-empty
           - a-update-branch

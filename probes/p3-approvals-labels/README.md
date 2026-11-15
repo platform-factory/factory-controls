@@ -69,6 +69,10 @@ gh run view --repo platform-factory/factory-controls --log <run id>    # the cal
    succeed and end case (a)).
 4. App: `a-push-content`. Expect the approval DISMISSED, `reviewDecision`
    REVIEW_REQUIRED, the merge 405.
+   Each push step waits until the pull request shows the new head and a
+   computed mergeability before it reads and attempts the merge (the first
+   run did not, and its reads were stale). `a-merge` makes the merge attempt
+   alone, on the settled head.
 5. Listed human approves again. App: `a-push-empty`. Same expectation.
 6. Listed human approves again. App: `a-update-branch`. Same expectation.
 7. App: `c-approve` with `pr` = the delegate's README.md pull request and

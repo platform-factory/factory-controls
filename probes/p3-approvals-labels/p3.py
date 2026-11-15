@@ -26,7 +26,8 @@ one team in one ruleset (P1).
     python3 p3.py human-prs     --dry-run          # README.md and go.mod pull requests by the delegate
     python3 p3.py a-open        --dry-run          # [App] go.mod pull request, one commit behind its base
     python3 p3.py a-read        --dry-run --pr N   # reads only (the approved pull request is mergeable)
-    python3 p3.py a-push-content|a-push-empty|a-update-branch --dry-run --pr N   # [App], then reads
+    python3 p3.py a-push-content|a-push-empty|a-update-branch --dry-run --pr N   # [App], then settled reads
+    python3 p3.py a-merge       --dry-run --pr N   # [App] a merge attempt on the settled head, no push before it
     python3 p3.py c-approve     --dry-run --pr N --pr2 M   # [App] approves the delegate's two pull requests
     python3 p3.py d-labels      --dry-run --pr N   # [App] applies and removes a label; then read the events
     python3 p3.py e-reads       --dry-run --pr N   # [App] the reads the detector and merge step make
@@ -47,6 +48,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -96,6 +98,31 @@ def pr_head(api, n) -> tuple[str, str]:
     return "<head>", "<branch>"
 
 
+def settle(api, n, old_head: str | None = None, want_head: str | None = None, tries: int = 20, wait: float = 3.0):
+    """Wait until GitHub has taken a push into the pull request: its head is
+    the new commit (or no longer the old one) and its mergeability is
+    computed. Why: on the first run (2026-11-15) the reads made straight
+    after createCommitOnBranch still saw the old head and the old approval,
+    and the merge attempt, sent with the old head, got a transient 405
+    ("Base branch was modified"), which says nothing about the approval.
+    Sends nothing in --dry-run."""
+    if not api.execute:
+        return
+    for _ in range(tries):
+        res = api.call("GET", f"repos/{probe.REPO}/pulls/{n}", note="settling: head and mergeable_state")
+        if isinstance(res, dict):
+            head = res["head"]["sha"]
+            moved = (want_head is None or head == want_head) and (old_head is None or head != old_head)
+            if moved and res.get("mergeable_state") not in (None, "unknown"):
+                return
+        time.sleep(wait)
+
+
+def new_oid(res) -> str | None:
+    return ((((res or {}).get("data") or {}).get("createCommitOnBranch") or {}).get("commit") or {}).get("oid") \
+        if isinstance(res, dict) else None
+
+
 def reads(api, n, label: str, merge: bool = True) -> None:
     api.pr_status(n, note=f"{label}: reviewDecision, mergeStateStatus, reviews (is the approval DISMISSED?)")
     api.call("GET", f"repos/{probe.REPO}/pulls/{n}/reviews", note=f"{label}: review states and commit ids")
@@ -118,7 +145,7 @@ def current_go_mod(api, ref: str) -> str | None:
 
 
 def main(argv=None) -> int:
-    steps = ["bases", "ruleset", "human-prs", "a-open", "a-read", "a-push-content", "a-push-empty",
+    steps = ["bases", "ruleset", "human-prs", "a-open", "a-read", "a-merge", "a-push-content", "a-push-empty",
              "a-update-branch", "c-approve", "d-labels", "e-reads", "b-open-merge",
              "f-open", "f-workflow-base", "f-update-branch", "f-remake"]
     ap = probe.parser("P3: approvals and labels", steps)
@@ -175,15 +202,22 @@ def main(argv=None) -> int:
         # No merge attempt here: with the approval on the head the pull request is mergeable,
         # and merging it would end case (a) before the pushes.
         reads(api, n, "after the listed human's approval", merge=False)
+    elif a.step == "a-merge":
+        # A merge attempt on a settled head, with no push before it: the plain
+        # answer to "is the merge refused?" for the state the pull request is in.
+        settle(api, n)
+        reads(api, n, "merge attempt on the settled head")
     elif a.step in ("a-push-content", "a-push-empty"):
         head, b = pr_head(api, n)
         files = {"go.mod": go_mod_line(current_go_mod(api, b), "agent 2")} if a.step == "a-push-content" else {}
-        commit(api, b, head, files, f"p3: {'a content change' if files else 'an empty commit'}")
+        res = commit(api, b, head, files, f"p3: {'a content change' if files else 'an empty commit'}")
+        settle(api, n, old_head=head, want_head=new_oid(res))
         reads(api, n, f"after {a.step}")
     elif a.step == "a-update-branch":
         head, _ = pr_head(api, n)
         api.call("PUT", f"repos/{probe.REPO}/pulls/{n}/update-branch", {"expected_head_sha": head},
                  note="[App] update the branch with its base")
+        settle(api, n, old_head=head)
         reads(api, n, "after update-branch")
     elif a.step == "c-approve":
         for x in (n, a.pr2):
@@ -217,6 +251,7 @@ def main(argv=None) -> int:
                        "base": BASE_L2, "body": "P3 probe."}, note="[App] no approval will be given")
         m = probe.number(res, st.get("rung0_pr"))
         st["rung0_pr"] = m
+        settle(api, m)
         reads(api, m, "rung 0, no approval (expect merged)")
     elif a.step == "f-open":
         base = tip(api, BASE_F)

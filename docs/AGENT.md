@@ -126,7 +126,8 @@ item. So:
   step logs its size and digest; a fixed-size ciphertext says nothing, so it
   cannot be compared with a seed's pull request body (ADV-09). The artifact
   is still deleted before the pull request opens. Checked locally: two
-  summaries of 5 and 8000 bytes both seal to 8752 bytes with OpenSSL 3.5 in
+  summaries of 5 and 8000 bytes both seal to one size (8752 bytes with the
+  build's test certificate, 8758 with the committed one) with OpenSSL 3.5 in
   the builder image, and `factory/open_pr.py` opens both;
 - the merge step and the settlement make the same reads for every open
   queue-item pull request, and a failed read ends the step with one message

@@ -71,7 +71,7 @@ attributed to the App, and whether a merge shows `merged_by` as the App.
    job log (its `GITHUB_TOKEN Permissions` block, and the `c21 attempts`
    step's one JSON line: no secret present, the write refused, no OIDC
    variables), the artifact (go.mod, go.sum and summary.md.cms only, the last
-   8752 bytes for any summary), and `records-p4:fixtures/c21-model-job-*`.
+   8758 bytes for any summary with the committed certificate), and `records-p4:fixtures/c21-model-job-*`.
 3. `python3 p4.py read-pr --execute --pr <n>`: the pull request's author,
    each commit's verification and attribution, `class-scope` and `go-test` on
    the head, and `class-scope`'s verdict annotation (`pass`, `pass_kind`

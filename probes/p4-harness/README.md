@@ -25,28 +25,33 @@ attributed to the App, and whether a merge shows `merged_by` as the App.
 - In factory-controls: a P4 form of the agent's workflow, `agent-p4.yml`,
   run from `main` (the `agent-app` and `agent-model` environments serve
   `main` only). It is `agent.yml` with these differences and no others:
-  - `CLASS_FILE` points to `probe/p4-class.yaml`, a copy of the class file
-    template whose `repo` is `platform-factory/m4-probe` and whose listed
-    login is filled, and each App token step names `repositories: m4-probe`.
-    The copy lives outside `classes/`: the class file itself has no commit
-    until its first, approved one, which comes after P4 (readiness note,
-    order step 3);
-  - a workflow-level `env: {RECORDS_BRANCH: records-p4}`, so the run record
-    and every other record go to the branch `records-p4`, never to
-    `records` (review finding B1). The run record names
-    `repo: platform-factory/m4-probe`, so even on `records` no reader of
-    svc-hello's records would count it; the separate branch keeps the real
-    one clean, since `records` refuses deletion and force-push;
-  - the `pre-merge` and `merge` jobs are removed and `prepare` has no
-    `needs` and no `if`: the ratchet App is not installed on `m4-probe`, so
-    `pre-merge` could not mint its token, and the merge step's checks
+  - no schedule: it runs only when dispatched (a scheduled copy would open
+    a pull request on the throwaway repository twice an hour);
+  - a workflow-level `env` with `CLASS_FILE: probe/p4-class.yaml` and
+    `RECORDS_BRANCH: records-p4`. The first names a copy of the class file
+    template whose `repo` is `platform-factory/m4-probe` and whose
+    placeholders are filled (the listed login, the seed key's hash and the
+    skill's pre-release pin as they will go into the class file; the wall
+    ruleset id is a P1 probe ruleset, read by nothing in P4). The copy lives
+    outside `classes/`: the class file itself has no commit until its first,
+    approved one, which comes after P4 (readiness note, order step 3). The
+    second sends the run record and every other record to the branch
+    `records-p4`, never to `records` (review finding B1); the run record
+    names `repo: platform-factory/m4-probe`, so even on `records` no reader
+    of svc-hello's records would count it, and the separate branch keeps the
+    real one clean, since `records` refuses deletion and force-push;
+  - the agent App's token step names `repositories: m4-probe`;
+  - the `pre-merge`, `merge` and `scorecard` jobs are removed, and `prepare`
+    needs only the guard: the ratchet App is not installed on `m4-probe`,
+    so `pre-merge` could not mint its token, and the merge step's checks
     compare svc-hello's ruleset id and listing, need a detector heartbeat
     and a passing push run of `go-test` on the probe's main, none of which
     exists for `m4-probe` (review finding M1). P4 therefore opens a pull
     request and never merges one; `merged_by` is read from P3 (step 4).
   `agent-p4.yml` and `probe/p4-class.yaml` are added by one pull request and
   removed after P4; both commits are recorded with P4's results. P4 runs
-  after the listed login is known (human step 2).
+  after the listed login is known (human step 2). The branch `records-p4`
+  must exist before the run (the delegate creates it, with a README only).
 - On `m4-probe`, the `class-scope` workflow's decide step carries
   `RECORDS_BRANCH: records-p4` and `CLASS_FILE_PATH: probe/p4-class.yaml` in
   its `env`, so it reads the P4 run record and the P4 copy of the class file

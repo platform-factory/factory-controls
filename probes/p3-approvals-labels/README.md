@@ -107,16 +107,34 @@ gh run view --repo platform-factory/factory-controls --log <run id>    # the cal
 
 | Case | Expected | Observed | As expected? |
 |---|---|---|---|
-| (a) content push after approval | approval dismissed; merge refused | | |
-| (a) empty commit after approval | approval dismissed; merge refused | | |
-| (a) update-branch after approval | approval dismissed; merge refused | | |
-| (b) rung 0, no approval | merges | | |
-| (c) App approves a person's README.md pull request | not counted; still BLOCKED | | |
-| (c) App approves a person's go.mod pull request at rung 1 | not counted; still BLOCKED | | |
-| (d) App applies and removes a label | events name the App (`performed_via_github_app`) | | |
-| (e) App token: actions runs, check runs, jobs, contents, compare, artifacts | not stated by the docs | | |
-| (f) update-branch after the base gained a workflow file | not stated by the docs; refused for `workflows` is likely [I] | | |
-| (f) remake: `createCommitOnBranch` on the base's tip, then `PATCH git/refs` force | the commit accepted; the force-move not stated by the docs | | |
+| (a) content push after approval | approval dismissed; merge refused | review DISMISSED (event `review_dismissed`, actor the App); BLOCKED; the App's merge 405 "Waiting on required approvals from 1 team" (#29) | yes |
+| (a) empty commit after approval | approval dismissed; merge refused | approval kept, its `commit_id` re-pointed to the new head, `submitted_at` unchanged; the App's merge succeeded (#29) | **no** |
+| (a) update-branch after approval | approval dismissed; merge refused | approval kept and re-pointed the same way; the App's merge succeeded (#35) | **no** |
+| (b) rung 0, no approval | merges | merged by the App (#30) | yes |
+| (c) App approves a person's README.md pull request | not counted; still BLOCKED | BLOCKED, `platform` still requested (#27, #32) | yes |
+| (c) App approves a person's go.mod pull request at rung 1 | not counted; still BLOCKED | BLOCKED, `platform` still requested (#33; #28 was in conflict and gave no reading) | yes |
+| (d) App applies and removes a label | events name the App (`performed_via_github_app`) | `actor.login` `platform-factory-agent[bot]`, type Bot; `performed_via_github_app` null on both events | actor yes; the field no |
+| (e) App token: actions runs, check runs, contents, compare, reviews, issue events, rulesets, artifacts | not stated by the docs | 200 for all eight | recorded |
+| (f) update-branch after the base gained a workflow file | not stated by the docs; refused for `workflows` is likely [I] | accepted (202), the branch updated (#31) | recorded |
+| (f) remake: `createCommitOnBranch` on the base's tip, then `PATCH git/refs` force | the commit accepted; the force-move not stated by the docs | all accepted; the commit verified and attributed to the App | recorded |
+
+Run 2026-11-15 on `m4-probe`, in three sets (the default, `b` and `c`): the
+empty-commit step's merge ended #29, so update-branch ran on #35, and (c)'s
+go.mod reading on #33.
+
+What follows from the two rows marked no:
+
+- GitHub dismisses an approval on a required-reviewers entry only when the
+  pull request's diff changes. The note's fallback (a) applies. A check that
+  the approval's `commit_id` equals the head is not enough, because GitHub
+  re-points it; factory-controls' `open_pr.approved_on_head` also requires
+  the approval to be no older than `class-scope`'s first run on the head.
+- An App's own events carry no `performed_via_github_app`. Every reader
+  goes by the actor's login.
+
+Unplanned: an approval made from the owner login (not in `platform`) left
+#34 BLOCKED and the App's merge refused; update-branch did not dismiss that
+review either.
 
 ## Fallbacks (fixed by the note)
 

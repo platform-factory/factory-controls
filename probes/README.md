@@ -35,7 +35,7 @@ base branches of their own and loosen nothing); the listed human makes P3's
 approvals in the browser; the agent App's acts run from a workflow in
 factory-controls, because its key exists nowhere else.
 
-P1 and P2 have been run (2026-11-12 and 2026-11-15); their READMEs hold the
-results. P3 and P4 have not. `python3 -m unittest discover -s tests`
+P1, P2 and P3 have been run (2026-11-12 and 2026-11-15); their READMEs hold
+the results. P4 has not. `python3 -m unittest discover -s tests`
 runs every step of every script in `--dry-run` and checks that no command is
 executed.

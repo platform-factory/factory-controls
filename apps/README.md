@@ -54,6 +54,15 @@ permission added to the manifest (the ratchet App: `actions: read`,
 first commit, with C-21's attempt list noting it. The manifests here are
 exactly ADR-0024 §7 until then.
 
+**What P3 answered (2026-11-15).** With the agent App's installation token
+on `m4-probe`, each of these reads returned 200: workflow runs, check runs
+on a commit, file contents, a compare, a pull request's reviews, its issue
+events, the rulesets list and the artifacts list. So the agent App's
+manifest stays as it is. The ratchet App holds no `contents` permission and
+was not installed on `m4-probe`, so its reads of file contents and compares
+are still untried; the detector's `--dry-run` with its token, right after
+human step 8, is where they are first made.
+
 ## Registering one (the owner, in the browser)
 
 Human step 4 of `docs/RUNBOOK.md`. The owner account must be signed in to

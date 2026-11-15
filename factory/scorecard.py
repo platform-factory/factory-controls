@@ -611,7 +611,10 @@ def _review(snap, pr, events, reviews, logins, cs_name, gt_name, integ, median_c
     # The listed human's latest decision on the head, by the merge step's own
     # rule (ADV-16): a later changes-requested or `decision: close` undoes an
     # earlier approval.
-    approved = open_pr.approved_on_head(reviews, logins, (pr.get("head") or {}).get("sha"))
+    head = (pr.get("head") or {}).get("sha")
+    starts = [c["started_at"] for c in check_runs_on(snap, head, cs_name, integ) if c.get("started_at")]
+    approved = open_pr.approved_on_head(reviews, logins, head,
+                                        head_seen_at=min(starts, key=_t) if starts else None)
     return {"by": (r.get("user") or {}).get("login"), "review_id": r.get("id"), "submitted_at": at,
             "state": r.get("state"), "commit_id": r.get("commit_id"), **form,
             "decision_matches_state": (None if not form["form_valid"] else form["decision"] == state_decision),
@@ -804,7 +807,12 @@ def _machinery_label_unknowns(events: list[dict], seed_record: dict | None = Non
     listed: class-scope's needs-human writes (the workflow's token,
     github-actions), and the settlement step's `seeded`, applied with the
     agent App's token after it wrote the pull request's seed record (so at or
-    after the record's settled_at)."""
+    after the record's settled_at).
+
+    An App's act is told by its actor, a login ending `[bot]`, never by
+    `performed_via_github_app` alone: probe P3 (2026-11-15) showed that field
+    null on the agent App's own label events (and P2 showed it null for the
+    workflow's token). A slug, when present, also marks an App."""
     settled = st.parse_time((seed_record or {}).get("settled_at"))
     out = []
     for e in sorted(events, key=lambda e: (e.get("created_at") or "", e.get("id") or 0)):
@@ -813,7 +821,7 @@ def _machinery_label_unknowns(events: list[dict], seed_record: dict | None = Non
         actor = (e.get("actor") or {}).get("login", "")
         if e.get("event") not in ("labeled", "unlabeled") or name not in st.MACHINERY_LABELS:
             continue
-        if not app or app == "github-actions" or actor == "github-actions[bot]":
+        if not (app or actor.endswith("[bot]")) or app == "github-actions" or actor == "github-actions[bot]":
             continue
         t = st.parse_time(e.get("created_at"))
         if name == "seeded" and e.get("event") == "labeled" and settled and t and t >= settled:

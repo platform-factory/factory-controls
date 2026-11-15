@@ -261,7 +261,8 @@ def main(argv: list[str] | None = None, env: dict | None = None,
     env = dict(os.environ if env is None else env)
     ap = argparse.ArgumentParser(prog="python3 -m factory.prepare")
     ap.add_argument("--out", required=True, help="the workspace directory to build")
-    ap.add_argument("--svc-git-url", default="https://github.com/platform-factory/svc-hello")
+    ap.add_argument("--svc-git-url", default=None,
+                    help="default: the class file's `repo` on github.com (probe P4's copy names m4-probe)")
     ap.add_argument("--skill-git-url", default=None)
     ap.add_argument("--now", default=None, help="ISO time to judge release age at (local dry runs)")
     ap.add_argument("--allow-placeholders", action="store_true",
@@ -299,7 +300,8 @@ def main(argv: list[str] | None = None, env: dict | None = None,
     if d["ready"]:
         skill_url = args.skill_git_url or f"https://github.com/{cf['skill']['repo']}"
         try:
-            ws = build_workspace(args.out, cf, item, snap["main_sha"], args.svc_git_url, skill_url, fetch)
+            svc_url = args.svc_git_url or f"https://github.com/{cf['repo']}"
+            ws = build_workspace(args.out, cf, item, snap["main_sha"], svc_url, skill_url, fetch)
         except PrepareRefused as e:
             out.update(ready=False, reason=str(e))
             _output(pairs, env)

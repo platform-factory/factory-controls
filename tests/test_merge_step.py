@@ -373,6 +373,43 @@ class SeedLooksLikeAnItemTest(unittest.TestCase):
         w.review(6, "h6", at(30))
         self.assertEqual(self.run_with([3, 9, 12, 15], w)["action"], "merge")
 
+    def test_an_approval_carried_onto_a_new_head_does_not_merge(self):
+        """Probe P3 (2026-11-15): an empty commit or an update from main
+        leaves the listed human's approval in place, with its commit_id
+        re-pointed to the new head. The merge step waits for a new approval:
+        the one it sees is older than class-scope's first run on the head."""
+        w = self.world()
+        w.class_scope_job("h6", 7001, "success", PASS_STEPS, started=at(32))   # the head appeared at minute 32
+        w.go_test_check("h6", "success")
+        w.review(6, "h6", at(30))                    # approved at minute 30, on the head before it
+        out = self.run_with([3, 9, 12, 15], w)       # a real item, not a seed
+        self.assertEqual(out["action"], "wait")
+        self.assertFalse(out["approved_on_head"])
+        self.assertIn("approval on the head", out["decision"]["reason"])
+        self.assertEqual(w.gh.writes(), [])
+        w.review(6, "h6", at(34))                    # approved again, after the head appeared
+        self.assertEqual(self.run_with([3, 9, 12, 15], w)["action"], "merge")
+        # A label re-runs class-scope on the same head; the first run still dates the head.
+        w = self.world()
+        w.class_scope_job("h6", 7001, "success", PASS_STEPS, started=at(10))
+        w.class_scope_job("h6", 7011, "success", PASS_STEPS, started=at(33))
+        w.go_test_check("h6", "success")
+        w.review(6, "h6", at(30))
+        self.assertEqual(self.run_with([3, 9, 12, 15], w)["action"], "merge")
+
+    def test_past_the_last_seed_position_a_carried_approval_still_waits(self):
+        """After the hold ends (19 merged) the merge step asks GitHub for an
+        unapproved item (C-15's L1 refusal), but GitHub would merge on an
+        approval it carried over an empty commit: the merge step waits."""
+        pr = [{"number": 2, "queue_item": True, "head_sha": "h2"}]
+        ok = {"verdict": "pass", "head_sha": "h2"}
+        D = merge_step.decide_merge
+        self.assertEqual(D(pr, [], True, 0, ok, ok, review_hold=False)["action"], "merge")   # none: GitHub decides
+        d = D(pr, [], True, 0, ok, ok, review_hold=False, stale_approval=True)
+        self.assertEqual(d["action"], "wait")
+        self.assertIn("older than the head", d["reason"])
+        self.assertEqual(D(pr, [], True, 0, ok, ok, review_hold=False, approved=True)["action"], "merge")
+
     def test_a_review_by_anyone_else_is_no_decision(self):
         w = self.world()
         w.class_scope_job("h6", 7001, "success", PASS_STEPS)

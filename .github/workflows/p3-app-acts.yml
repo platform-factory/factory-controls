@@ -1,0 +1,76 @@
+# P3's App acts: runs one step of probes/p3-approvals-labels/p3.py with the
+# agent App's installation token for the throwaway repository.
+#
+# Why a workflow: the agent App's key lives only in the controls repo's
+# `agent-app` environment, which serves workflows from `main` alone; no copy
+# of it exists on any machine. For P3 this file and the probe kit (as
+# `probes/`) are added to factory-controls by a pull request and removed by
+# another after P3; both commits are recorded with P3's results.
+name: p3-app-acts
+
+on:
+  workflow_dispatch:
+    inputs:
+      step:
+        description: "P3 step marked [App]"
+        required: true
+        type: choice
+        options:
+          - a-open
+          - a-read
+          - a-push-content
+          - a-push-empty
+          - a-update-branch
+          - c-approve
+          - d-labels
+          - e-reads
+          - b-open-merge
+          - f-open
+          - f-update-branch
+          - f-remake
+      pr:
+        description: "Pull request number"
+        required: false
+        type: string
+        default: ""
+      pr2:
+        description: "Second pull request (c-approve)"
+        required: false
+        type: string
+        default: ""
+
+permissions: {}
+
+jobs:
+  act:
+    name: act
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: agent-app
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: agent App token for m4-probe
+        id: agent
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+          owner: platform-factory
+          repositories: m4-probe
+
+      - name: p3 step
+        env:
+          APP_TOKEN: ${{ steps.agent.outputs.token }}
+          STEP: ${{ inputs.step }}
+          PR: ${{ inputs.pr }}
+          PR2: ${{ inputs.pr2 }}
+        run: |
+          args=("$STEP" --execute)
+          if [ -n "$PR" ]; then args+=(--pr "$PR"); fi
+          if [ -n "$PR2" ]; then args+=(--pr2 "$PR2"); fi
+          python3 probes/p3-approvals-labels/p3.py "${args[@]}"

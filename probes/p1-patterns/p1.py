@@ -27,7 +27,8 @@ Each (variant, config) has its own base branch and ruleset, so no step lowers
 or removes anything and the delegate runs them all.
 
 The last two read the controls repo's code and committed rulesets from a
-checkout beside this kit (FACTORY_CONTROLS_DIR, default ../factory-controls).
+checkout (FACTORY_CONTROLS_DIR; default: the repository holding this kit as
+`probes/`, else ../factory-controls).
 """
 
 from __future__ import annotations
@@ -42,7 +43,19 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "lib"))
 import probe  # noqa: E402
 
-CONTROLS_DIR = Path(os.environ.get("FACTORY_CONTROLS_DIR") or HERE.parent.parent / "factory-controls")
+def _controls_dir() -> Path:
+    """factory-controls: FACTORY_CONTROLS_DIR, else the repository this kit
+    sits in as `probes/` (it does for the length of P3), else a checkout
+    beside the kit."""
+    if os.environ.get("FACTORY_CONTROLS_DIR"):
+        return Path(os.environ["FACTORY_CONTROLS_DIR"])
+    inside = HERE.parent.parent
+    if (inside / "rulesets" / "svc-hello" / "l1.json").exists():
+        return inside
+    return inside / "factory-controls"
+
+
+CONTROLS_DIR = _controls_dir()
 
 FILES = ["go.mod", "x/go.mod", "README.md", ".github/workflows/a.yml", ".gitignore", "sub/dir/f.txt"]
 VARIANTS = {

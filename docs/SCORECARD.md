@@ -130,8 +130,10 @@ The streak, near-misses, seeds and labels in force come from
   was changed away from main).
 - **Approved.** The listed human's latest decision on the head (an
   approving, changes-requested or dismissed review, or a comment review in
-  the fixed form saying `decision: close`) must be an approval on the head:
-  the merge step's own rule.
+  the fixed form saying `decision: close`) must be an approval on the head,
+  submitted no earlier than `class-scope`'s first run on it: the merge
+  step's own rule (`open_pr.approved_on_head`; probe P3 is why the time is
+  part of it).
 
 ## The six human-entered fields (declared before the run)
 

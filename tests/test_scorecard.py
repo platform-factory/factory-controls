@@ -255,7 +255,9 @@ class InconclusiveTest(unittest.TestCase):
         self.assertEqual(row["review"]["measured_minutes"], 5.0)
         # The App's human-cleared is an unknown, and so is its removal of needs-human
         # (ADV-20 (3): C-21 records each such act as an unknown or a tamper).
-        apps = [u for u in out["unknowns"]["label_events"] if u["app"] == "platform-factory-agent"]
+        # Told by the actor: an App's own events carry no performed_via_github_app (P3).
+        apps = [u for u in out["unknowns"]["label_events"] if u["actor"] == AGENT_BOT]
+        self.assertEqual({u["app"] for u in apps}, {None})
         self.assertEqual([(u["event"], u["label"]) for u in apps],
                          [("labeled", "human-cleared"), ("unlabeled", "needs-human")])
 

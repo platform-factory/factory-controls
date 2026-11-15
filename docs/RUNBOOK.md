@@ -435,12 +435,23 @@ gh api repos/platform-factory/svc-hello/issues/<n>/events \
 gh api repos/platform-factory/svc-hello/pulls/<n>/reviews --jq '.[] | {user: .user.login, state, commit_id, submitted_at, body}'
 ```
 
+`app` is empty on every event made with an installation token, the agent
+App's and a workflow's own alike (probes P2 and P3): the actor's login is
+what tells who acted (`platform-factory-agent[bot]`, `github-actions[bot]`,
+or your login), and it is what `class-scope` and the scorecard go by.
+
 At L1 a pull request that another merge leaves behind `main` is updated by
-the merge step, which dismisses the approval; approve it again (the same
-form is fine). If main gained a workflow change, update-branch is refused to
-the agent App (it has no `workflows` permission) and the merge step makes the
-same go.mod and go.sum again as a new commit on main's tip instead; the
-packet then shows a new head, and you approve that one.
+the merge step. Probe P3 showed that GitHub keeps your approval across such
+an update (and across an empty commit): it dismisses an approval only when
+the pull request's diff changes, and it re-points the kept review to the new
+head. The merge step does not count an approval older than the head (older
+than `class-scope`'s first run on it), so it waits, and the pull request
+looks approved while it does. Approve it again (the same form is fine)
+after `class-scope` has run on the new head. P3 also showed the agent App
+can update a branch after main gained a workflow change; if GitHub ever
+refuses that, the merge step makes the same go.mod and go.sum again as a new
+commit on main's tip instead, the packet then shows a new head, and you
+approve that one.
 
 C-15's L1 case, "no approval, refused by the merge API": while a seed can
 still open, the merge step never asks GitHub to merge a pull request that

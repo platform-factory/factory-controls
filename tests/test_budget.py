@@ -75,7 +75,7 @@ def budget_world(extra_fixtures: int = 0, extra_ledger: int = 0) -> ScoreWorld:
     w.set_main(f"m{n}", go_mod_with(**versions))
     item = queue[merges]
     w.queue_pr(20, item["position"], item["module"], item["version"], ago(30), head_sha="h20")
-    w.class_scope_job("h20", 9001, "success", PASS)
+    w.class_scope_job("h20", 9001, "success", PASS, started=ago(28))   # before the approval, on one clock
     w.go_test_check("h20", "success")
     w.reviews[20] = [{"id": 1, "user": {"login": HUMAN}, "state": "APPROVED", "commit_id": "h20",
                       "submitted_at": ago(20), "body": "minutes: 3; sections: verdict; decision: approve; reason: ok"}]

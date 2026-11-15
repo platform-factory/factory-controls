@@ -219,8 +219,14 @@ class MemoryRecords:
 
 
 def ev(kind, at, actor=HUMAN, label=None, app=None, eid=None):
+    """An issue event as GitHub returns it. Probes P2 and P3 (2026-11-15):
+    an event made with an installation token (an App's, or a workflow's own)
+    names the bot as `actor` and carries `performed_via_github_app: null`, so
+    `app` is dropped for a `[bot]` actor however a test passes it. The field
+    is set only for an act made through an App on a person's behalf."""
+    via = None if actor.endswith("[bot]") else ({"slug": app} if app else None)
     e = {"id": eid or abs(hash((kind, at, actor, label))) % 10**9, "event": kind, "created_at": at,
-         "actor": {"login": actor}, "performed_via_github_app": ({"slug": app} if app else None)}
+         "actor": {"login": actor}, "performed_via_github_app": via}
     if label:
         e["label"] = {"name": label}
     return e

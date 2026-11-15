@@ -147,10 +147,11 @@ class ReviewerDecisionTest(unittest.TestCase):
         close = {**self.r("COMMENTED", commit="h2", at_="2026-11-12T10:05:00Z"),
                  "body": "minutes: 2; sections: a; decision: close; reason: x"}
         comment = {**self.r("COMMENTED", commit="h2", at_="2026-11-12T10:06:00Z"), "body": "looks fine"}
-        self.assertFalse(op.approved_on_head([approve, changes], H, "h2"))
-        self.assertFalse(op.approved_on_head([approve, close], H, "h2"))
-        self.assertTrue(op.approved_on_head([approve, comment], H, "h2"))   # a plain comment decides nothing
-        self.assertTrue(op.approved_on_head([changes, {**approve, "submitted_at": "2026-11-12T10:09:00Z"}], H, "h2"))
+        A = lambda reviews: op.approved_on_head(reviews, H, "h2", head_seen_at="2026-11-12T09:50:00Z")
+        self.assertFalse(A([approve, changes]))
+        self.assertFalse(A([approve, close]))
+        self.assertTrue(A([approve, comment]))   # a plain comment decides nothing
+        self.assertTrue(A([changes, {**approve, "submitted_at": "2026-11-12T10:09:00Z"}]))
 
     def test_a_dismissed_review_is_an_approval_only_without_a_later_close(self):
         """ADV-20 (5): DISMISSED does not say what was dismissed."""
@@ -164,10 +165,27 @@ class ReviewerDecisionTest(unittest.TestCase):
         self.assertEqual(op.reviewer_decision([formed], [], H)["kind"], "close")
 
     def test_approved_on_head(self):
-        self.assertTrue(op.approved_on_head([self.r("APPROVED", commit="h2")], [fakes.HUMAN], "h2"))
-        self.assertFalse(op.approved_on_head([self.r("APPROVED", commit="h1")], [fakes.HUMAN], "h2"))
-        self.assertFalse(op.approved_on_head([self.r("DISMISSED", commit="h2")], [fakes.HUMAN], "h2"))
-        self.assertFalse(op.approved_on_head([self.r("APPROVED", actor="x", commit="h2")], [fakes.HUMAN], "h2"))
+        seen = "2026-11-12T09:50:00Z"   # class-scope first ran on h2 ten minutes before the review
+        A = lambda reviews, at=seen: op.approved_on_head(reviews, [fakes.HUMAN], "h2", head_seen_at=at)
+        self.assertTrue(A([self.r("APPROVED", commit="h2")]))
+        self.assertFalse(A([self.r("APPROVED", commit="h1")]))
+        self.assertFalse(A([self.r("DISMISSED", commit="h2")]))
+        self.assertFalse(A([self.r("APPROVED", actor="x", commit="h2")]))
+
+    def test_an_approval_older_than_the_head_does_not_count(self):
+        """Probe P3: after an empty commit or an update from the base GitHub
+        keeps the approval and re-points its commit_id to the new head. The
+        review's submitted_at stays, and the head's first class-scope run is
+        later, so the approval is not one made on this head."""
+        carried = self.r("APPROVED", commit="h2", at_="2026-11-12T10:00:00Z")   # commit_id already re-pointed
+        A = lambda at: op.approved_on_head([carried], [fakes.HUMAN], "h2", head_seen_at=at)
+        self.assertFalse(A("2026-11-12T10:00:30Z"))   # h2 appeared after the approval
+        self.assertTrue(A("2026-11-12T10:00:00Z"))    # the same second counts as on the head
+        self.assertTrue(A("2026-11-12T09:59:00Z"))
+        self.assertFalse(A(None))                     # no server-side time for the head: nothing counts
+        again = self.r("APPROVED", commit="h2", at_="2026-11-12T10:02:00Z")
+        self.assertTrue(op.approved_on_head([carried, again], [fakes.HUMAN], "h2",
+                                            head_seen_at="2026-11-12T10:00:30Z"))   # approved again: counts
 
 
 class OpenWorld:

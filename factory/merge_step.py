@@ -310,7 +310,10 @@ def merge(ctx: detector.Context, seed_key: str | None, pre_merge_ok: bool,
         gt = st.check_run_verdict(gh, svc, pr["head_sha"], cf["checks"]["go_test"]["name"],
                                   cf["checks"]["integration_id"])
         reviews = gh.paginate(f"repos/{svc}/pulls/{pr['number']}/reviews")
-        approved = open_pr.approved_on_head(reviews, cf["human_logins"], pr["head_sha"])
+        # Not older than the head: GitHub keeps an approval across an empty
+        # commit or an update from main (P3), so the commit alone does not say.
+        approved = open_pr.approved_on_head(reviews, cf["human_logins"], pr["head_sha"],
+                                            head_seen_at=(cs or {}).get("first_started_at"))
         status = pr_status(gh, svc, pr["number"])
         # Read for every queue item, used only for a seed (ADV-11): a read made
         # only for a seed would show in the log's timing and in a traceback.

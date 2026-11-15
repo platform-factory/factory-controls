@@ -240,8 +240,10 @@ def merged_world() -> World:
     w.set_main("m1", go_mod_with(sync="v0.18.0"), parent="p0")
     w.push_run(501, "m1", [("completed", "success", ago(55))])
     w.queue_pr(2, 2, SYNC, "v0.19.0", ago(30), head_sha="h2")
+    # Started on the same clock as the approval: the merge step counts an
+    # approval only when it is no older than class-scope's first run on the head.
     w.class_scope_job("h2", 7001, "success", [("decide", "success"), ("verdict-inconclusive", "success"),
-                                              ("verdict-fail", "success")])
+                                              ("verdict-fail", "success")], started=ago(28))
     w.go_test_check("h2", "success")
     w.review(2, "h2", ago(10))
     w.heartbeat(ago(5))

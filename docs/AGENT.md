@@ -135,7 +135,12 @@ item. So:
 - the merge step reads, compares, updates and waits on a seed exactly as on
   an item. While a seed can be open (the rung is L1 and no more than 18
   items have merged), nothing goes to the merge API without the listed
-  human's approval on the head, seed or not. Once the listed human has
+  human's approval on the head, seed or not: the latest decision is an
+  approval, on the head commit, and submitted no earlier than
+  `class-scope`'s first run on that commit. The time is there because
+  GitHub keeps an approval across an empty commit or an update from main
+  and re-points it to the new head (probe P3), so the commit alone does not
+  show the approval was made on it. Once the listed human has
   decided, the merge step reports `wait-seed`, and the settlement step
   writes `seeds/<pr>.json`, labels the pull request `seeded` and closes it.
 

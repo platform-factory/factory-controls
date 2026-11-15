@@ -357,16 +357,28 @@ def _review_order(r: dict) -> tuple:
     return (st.parse_time(r.get("submitted_at")) or datetime.min.replace(tzinfo=timezone.utc), r.get("id") or 0)
 
 
-def approved_on_head(reviews: list[dict], human_logins: list[str], head_sha: str | None) -> bool:
-    """The listed human's latest decision is an approval on the current head
-    (P3 (a)'s fallback wording: "the listed human's latest approval is on the
-    head commit"; ADV-16).
+def approved_on_head(reviews: list[dict], human_logins: list[str], head_sha: str | None, *,
+                     head_seen_at: str | None) -> bool:
+    """The listed human's latest decision is an approval made on the current
+    head: on that commit, and not older than it (P3 (a)'s fallback: "the
+    listed human's latest approval is on the head commit"; ADV-16).
 
     A decision is a review in state APPROVED, CHANGES_REQUESTED or DISMISSED,
     or a COMMENTED review whose fixed form says `decision: close`; a plain
     comment is not one. So a later changes-requested or close undoes an
     earlier approval, and an approval GitHub turned stale on a push
-    (DISMISSED) does not count."""
+    (DISMISSED) does not count.
+
+    Why the time as well as the commit: probe P3 (2026-11-15) showed that
+    GitHub dismisses an approval only when the pull request's diff changes.
+    After an empty commit or an update from the base it keeps the approval
+    and re-points the review's `commit_id` to the new head, so `commit_id`
+    equal to the head does not show the approval was made on it. The
+    review's `submitted_at` is not rewritten. `head_seen_at` is the
+    server-side time the head became the head (`state.first_check_run_start`:
+    class-scope's first run on it); an approval submitted before it was made
+    on an earlier head and does not count, and with no such time nothing
+    counts. The listed human approves again."""
     mine = []
     for r in reviews:
         if not _human((r.get("user") or {}).get("login"), human_logins):
@@ -379,7 +391,9 @@ def approved_on_head(reviews: list[dict], human_logins: list[str], head_sha: str
     if not mine:
         return False
     last = max(mine, key=_review_order)
-    return last.get("state") == "APPROVED" and last.get("commit_id") == head_sha
+    seen, at = st.parse_time(head_seen_at), st.parse_time(last.get("submitted_at"))
+    return (last.get("state") == "APPROVED" and last.get("commit_id") == head_sha
+            and seen is not None and at is not None and at >= seen)
 
 
 def reviewer_decision(reviews: list[dict], events: list[dict], human_logins: list[str]) -> dict | None:

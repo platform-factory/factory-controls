@@ -198,6 +198,20 @@ def latest_check_run(check_runs: list[dict], name: str, integration_id: int) -> 
     return max(mine, key=lambda c: (c.get("started_at") or "", c.get("id") or 0))
 
 
+def first_check_run_start(check_runs: list[dict], name: str, integration_id: int) -> str | None:
+    """When GitHub Actions first started `name` on a commit: the earliest
+    `started_at` among that check's runs there, or None.
+
+    Why: it is the one server-side time for "this commit became the pull
+    request's head" that the agent App cannot write (it holds no `checks`
+    permission, and class-scope runs on every push to the pull request).
+    The merge step compares the listed human's approval with it; see
+    `open_pr.approved_on_head`."""
+    mine = [c.get("started_at") for c in check_runs if c.get("name") == name
+            and (c.get("app") or {}).get("id") == integration_id and parse_time(c.get("started_at"))]
+    return min(mine, key=parse_time) if mine else None
+
+
 def verdict_from_job(job: dict) -> dict:
     """class-scope's verdict from its job's step names (the contract's encoding).
 
@@ -302,18 +316,20 @@ def class_scope_verdict(gh, repo: str, head_sha: str, *, name: str = "class-scop
     """
     data = gh.get(f"repos/{repo}/commits/{head_sha}/check-runs", check_name=name,
                   filter="all", per_page=100)
-    cr = latest_check_run(data.get("check_runs", []) if isinstance(data, dict) else [],
-                          name, integration_id)
+    runs = data.get("check_runs", []) if isinstance(data, dict) else []
+    cr = latest_check_run(runs, name, integration_id)
+    first = first_check_run_start(runs, name, integration_id)
     if cr is None:
         return {"verdict": "none", "reason_class": None, "run_id": None, "job_id": None,
-                "check_run_id": None, "head_sha": head_sha}
+                "check_run_id": None, "head_sha": head_sha, "first_started_at": None}
     m = _DETAILS.search(cr.get("details_url") or cr.get("html_url") or "")
     run_id, job_id = (int(m.group(1)), int(m.group(2))) if m else (None, cr["id"])
     job = gh.get(f"repos/{repo}/actions/jobs/{job_id}")
     v = verdict_from_job(job)
     run_id = run_id or job.get("run_id")
     out = {**v, "run_id": run_id, "job_id": job_id, "check_run_id": cr.get("id"),
-           "head_sha": cr.get("head_sha", head_sha), "artifact": None, "annotation": None}
+           "head_sha": cr.get("head_sha", head_sha), "artifact": None, "annotation": None,
+           "first_started_at": first}
     if v["verdict"] == "pending":
         return out
     ann = read_verdict_annotation(gh, repo, cr.get("id"))

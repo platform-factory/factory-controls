@@ -379,6 +379,17 @@ def approved_on_head(reviews: list[dict], human_logins: list[str], head_sha: str
     class-scope's first run on it); an approval submitted before it was made
     on an earlier head and does not count, and with no such time nothing
     counts. The listed human approves again."""
+    return approval_on_head(reviews, human_logins, head_sha, head_seen_at=head_seen_at) == "on-head"
+
+
+def approval_on_head(reviews: list[dict], human_logins: list[str], head_sha: str | None, *,
+                     head_seen_at: str | None) -> str:
+    """Where the listed human's latest decision stands: "on-head" (an
+    approval made on the current head, see `approved_on_head`), "older" (an
+    approval still standing that was not made on it: GitHub carried it over
+    a push that left the diff alone), or "none" (no decision, or the latest
+    one is not an approval). The merge step never merges on "older" at L1,
+    held or not, and asks GitHub on "none" once no seed can open."""
     mine = []
     for r in reviews:
         if not _human((r.get("user") or {}).get("login"), human_logins):
@@ -389,11 +400,13 @@ def approved_on_head(reviews: list[dict], human_logins: list[str], head_sha: str
                 state == "COMMENTED" and m and m.group(1).lower() == "close"):
             mine.append(r)
     if not mine:
-        return False
+        return "none"
     last = max(mine, key=_review_order)
+    if last.get("state") != "APPROVED":
+        return "none"
     seen, at = st.parse_time(head_seen_at), st.parse_time(last.get("submitted_at"))
-    return (last.get("state") == "APPROVED" and last.get("commit_id") == head_sha
-            and seen is not None and at is not None and at >= seen)
+    on_head = last.get("commit_id") == head_sha and seen is not None and at is not None and at >= seen
+    return "on-head" if on_head else "older"
 
 
 def reviewer_decision(reviews: list[dict], events: list[dict], human_logins: list[str]) -> dict | None:

@@ -397,6 +397,19 @@ class SeedLooksLikeAnItemTest(unittest.TestCase):
         w.review(6, "h6", at(30))
         self.assertEqual(self.run_with([3, 9, 12, 15], w)["action"], "merge")
 
+    def test_past_the_last_seed_position_a_carried_approval_still_waits(self):
+        """After the hold ends (19 merged) the merge step asks GitHub for an
+        unapproved item (C-15's L1 refusal), but GitHub would merge on an
+        approval it carried over an empty commit: the merge step waits."""
+        pr = [{"number": 2, "queue_item": True, "head_sha": "h2"}]
+        ok = {"verdict": "pass", "head_sha": "h2"}
+        D = merge_step.decide_merge
+        self.assertEqual(D(pr, [], True, 0, ok, ok, review_hold=False)["action"], "merge")   # none: GitHub decides
+        d = D(pr, [], True, 0, ok, ok, review_hold=False, stale_approval=True)
+        self.assertEqual(d["action"], "wait")
+        self.assertIn("older than the head", d["reason"])
+        self.assertEqual(D(pr, [], True, 0, ok, ok, review_hold=False, approved=True)["action"], "merge")
+
     def test_a_review_by_anyone_else_is_no_decision(self):
         w = self.world()
         w.class_scope_job("h6", 7001, "success", PASS_STEPS)

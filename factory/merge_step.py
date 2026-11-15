@@ -108,13 +108,17 @@ SEED_SETTLE = "the reviewer's decision is recorded or a check failed: the settle
 
 def decide_merge(open_agent_prs: list[dict], seeds: list[int], seed_key_present: bool,
                  behind_by: int | None, cs: dict | None, gt: dict | None, *,
-                 review_hold: bool = False, approved: bool = False, seed_decided: bool = False) -> dict:
+                 review_hold: bool = False, approved: bool = False, seed_decided: bool = False,
+                 stale_approval: bool = False) -> dict:
     """What the merge phase does with the open agent pull request. Pure.
 
     `review_hold`: a seed can be open (see the module docstring), so nothing
     goes to the merge API without `approved` (the listed human's approval on
     the head). `seed_decided`: the open pull request is a seed and the listed
-    human has decided on it.
+    human has decided on it. `stale_approval`: the rung is L1 and the listed
+    human's standing approval was not made on the head (probe P3: GitHub
+    keeps an approval over an empty commit or an update from main, and would
+    merge on it); the merge step waits for a new one, held or not.
     """
     if not open_agent_prs:
         return {"action": "none", "reason": "no open agent pull request"}
@@ -145,6 +149,9 @@ def decide_merge(open_agent_prs: list[dict], seeds: list[int], seed_key_present:
             return {"action": "wait", "reason": "class-scope's verdict is not on the current head"}
         if review_hold and not approved:
             return {"action": "wait", "reason": "awaiting the listed human's approval on the head"}
+        if stale_approval:
+            return {"action": "wait", "reason": "the listed human's approval is older than the head; "
+                                                "awaiting a new approval on the head"}
         if is_seed:
             return {"action": "wait-seed", "reason": "a seed is never merged"}
         return {"action": "merge", "reason": "class-scope and go-test passed on the head"}
@@ -301,6 +308,7 @@ def merge(ctx: detector.Context, seed_key: str | None, pre_merge_ok: bool,
     cs = gt = status = None
     behind = None
     approved = seed_decided = False
+    approval = "none"
     # The same reads for a seed as for any other item (see the module docstring).
     if pr and pr.get("queue_item") and seed_key:
         cmp_ = gh.get(f"repos/{svc}/compare/{state.main_sha}...{pr['head_sha']}")
@@ -312,8 +320,9 @@ def merge(ctx: detector.Context, seed_key: str | None, pre_merge_ok: bool,
         reviews = gh.paginate(f"repos/{svc}/pulls/{pr['number']}/reviews")
         # Not older than the head: GitHub keeps an approval across an empty
         # commit or an update from main (P3), so the commit alone does not say.
-        approved = open_pr.approved_on_head(reviews, cf["human_logins"], pr["head_sha"],
+        approval = open_pr.approval_on_head(reviews, cf["human_logins"], pr["head_sha"],
                                             head_seen_at=(cs or {}).get("first_started_at"))
+        approved = approval == "on-head"
         status = pr_status(gh, svc, pr["number"])
         # Read for every queue item, used only for a seed (ADV-11): a read made
         # only for a seed would show in the log's timing and in a traceback.
@@ -323,10 +332,13 @@ def merge(ctx: detector.Context, seed_key: str | None, pre_merge_ok: bool,
             seed_decided = (open_pr.reviewer_decision(reviews, events, cf["human_logins"]) is not None
                             or seed_record is not None)
     hold = review_hold(state, cf)
+    # At L1 the rung entry asks for the listed human's approval; at L2 it asks
+    # for none, and an approval's age decides nothing.
+    stale = approval == "older" and state.rung != cf["rungs"]["l2"]
     d = decide_merge(prs, state.seeds, bool(seed_key), behind, cs, gt,
-                     review_hold=hold, approved=approved, seed_decided=seed_decided)
+                     review_hold=hold, approved=approved, seed_decided=seed_decided, stale_approval=stale)
     out.update(decision=d, pr=pr, class_scope=cs, go_test=gt, behind_by=behind, main_sha=state.main_sha,
-               approved_on_head=approved, review_hold=hold, pr_status=status)
+               approved_on_head=approved, approval=approval, review_hold=hold, pr_status=status)
     action = d["action"]
     out["action"] = action
     if action == "update-branch":

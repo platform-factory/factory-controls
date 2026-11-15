@@ -183,6 +183,12 @@ class ReviewerDecisionTest(unittest.TestCase):
         self.assertTrue(A("2026-11-12T10:00:00Z"))    # the same second counts as on the head
         self.assertTrue(A("2026-11-12T09:59:00Z"))
         self.assertFalse(A(None))                     # no server-side time for the head: nothing counts
+        S = lambda reviews, at: op.approval_on_head(reviews, [fakes.HUMAN], "h2", head_seen_at=at)
+        self.assertEqual(S([carried], "2026-11-12T10:00:30Z"), "older")
+        self.assertEqual(S([carried], "2026-11-12T09:59:00Z"), "on-head")
+        self.assertEqual(S([], "2026-11-12T09:59:00Z"), "none")
+        self.assertEqual(S([self.r("DISMISSED", commit="h2")], "2026-11-12T09:59:00Z"), "none")
+        self.assertEqual(S([self.r("APPROVED", commit="h1")], "2026-11-12T09:59:00Z"), "older")
         again = self.r("APPROVED", commit="h2", at_="2026-11-12T10:02:00Z")
         self.assertTrue(op.approved_on_head([carried, again], [fakes.HUMAN], "h2",
                                             head_seen_at="2026-11-12T10:00:30Z"))   # approved again: counts

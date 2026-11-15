@@ -24,7 +24,10 @@ def ctx(w: World, now_min: float) -> detector.Context:
 
 
 def run(w, now_min, attempts=None):
-    return detector.run(ctx(w, now_min))
+    # Ledger times (acted_at) come from the clock, not from ctx.now: keep the
+    # clock beside the world's, or a test's result depends on the day it runs.
+    with mock.patch.object(st, "utcnow", lambda: T0 + timedelta(minutes=now_min)):
+        return detector.run(ctx(w, now_min))
 
 
 def world_with_merge(**kw) -> World:

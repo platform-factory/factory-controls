@@ -7,7 +7,7 @@ from factory import open_pr as op
 from factory import reveal as rv
 from factory import seeds as sd
 from tests import fakes
-from tests.test_open_pr import KEY, SUMMARY, OpenWorld, at, sched_with
+from tests.test_open_pr import KEY, SUMMARY, T0, OpenWorld, at, sched_with
 from tests.fakes import go_mod_with
 
 SYNC = "golang.org/x/sync"
@@ -38,7 +38,7 @@ class RevealTest(unittest.TestCase):
                 pr["closed_at"] = "2026-11-30T00:00:00Z"
         with mock.patch.object(sd, "schedule", lambda key, cf: sched):
             return rv.reveal(ow.w.gh, ow.w.records, cf, KEY, fakes.CONTROLS, {"run_id": "9"},
-                             fakes.l1(), fakes.l2())
+                             fakes.l1(), fakes.l2(), now=T0)   # the world's clock, not the real one
 
     def test_a_seed_and_a_real_item_both_verify(self):
         for sched, is_seed in ((sched_with(2), True), (sched_with(9), False)):

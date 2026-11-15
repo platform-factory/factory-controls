@@ -371,13 +371,15 @@ class OpenCliTest(unittest.TestCase):
 
 class ScorecardCliTest(unittest.TestCase):
     def test_writes_the_three_files_to_the_records_branch(self):
-        from tests.scorecard_world import ScoreWorld, clean_streak
+        from tests.scorecard_world import T0, ScoreWorld, clean_streak
         w = ScoreWorld()
         clean_streak(w, 2)
         w.serve_records_branch()
         cli = Cli(w.gh)
         try:
-            rc, out = cli.run(sc, ["--out", os.path.join(cli.dir, "scorecard")])
+            # The CLI reads the clock itself; keep it at the world's start.
+            with mock.patch.object(st, "utcnow", lambda: T0):
+                rc, out = cli.run(sc, ["--out", os.path.join(cli.dir, "scorecard")])
         finally:
             cli.close()
         self.assertEqual((rc, out["streak"]), (0, 2))
@@ -387,14 +389,15 @@ class ScorecardCliTest(unittest.TestCase):
 
 
     def _run_with_requests_left(self, left):
-        from tests.scorecard_world import ScoreWorld, clean_streak
+        from tests.scorecard_world import T0, ScoreWorld, clean_streak
         w = ScoreWorld()
         clean_streak(w, 2)
         w.serve_records_branch()
         w.gh.route("GET", "rate_limit", {"resources": {"core": {"limit": 1000, "remaining": left}}})
         cli = Cli(w.gh)
         try:
-            rc, out = cli.run(sc, ["--out", os.path.join(cli.dir, "scorecard")])
+            with mock.patch.object(st, "utcnow", lambda: T0):
+                rc, out = cli.run(sc, ["--out", os.path.join(cli.dir, "scorecard")])
         finally:
             cli.close()
         return w, rc, out

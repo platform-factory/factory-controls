@@ -16,11 +16,13 @@ from factory import scorecard as sc
 from factory import state as st
 from tests import fakes
 from tests.fakes import AGENT_BOT, HUMAN, ev
-from tests.scorecard_world import PGX, SYNC, TEXT, ScoreWorld, at, clean_streak, form
+from tests.scorecard_world import PGX, SYNC, TEXT, T0, ScoreWorld, at, clean_streak, form
 
 
 def score(w: ScoreWorld) -> tuple[dict, dict]:
-    snap = sc.gather(w.gh, w.records, w.cf, meta={"read_at": "ignored"})
+    # as_of is the world's start, never the real clock: a merge with no push
+    # run then has its escape (a) window still open, on whatever day this runs.
+    snap = sc.gather(w.gh, w.records, w.cf, meta={"read_at": "ignored"}, now=T0)
     return sc.compute(snap, w.cf, fakes.l1(), fakes.l2()), snap
 
 
@@ -400,8 +402,8 @@ class WithholdingAndDeterminismTest(unittest.TestCase):
 
     def test_two_runs_over_the_same_inputs_give_byte_identical_json(self):
         w = self.world()
-        snap1 = sc.gather(w.gh, w.records, w.cf, meta={"read_at": "2026-11-21T00:00:00Z"})
-        snap2 = sc.gather(w.gh, w.records, w.cf, meta={"read_at": "2026-11-22T00:00:00Z", "run_id": "9"})
+        snap1 = sc.gather(w.gh, w.records, w.cf, meta={"read_at": "2026-11-21T00:00:00Z"}, now=T0)
+        snap2 = sc.gather(w.gh, w.records, w.cf, meta={"read_at": "2026-11-22T00:00:00Z", "run_id": "9"}, now=T0)
         a = sc.compute(snap1, w.cf, fakes.l1(), fakes.l2())
         b = sc.compute(snap2, w.cf, fakes.l1(), fakes.l2())
         from factory.records import dumps

@@ -214,6 +214,11 @@ jobs:
         with:
           name: agent-input
           path: agent-input/
+          # The workspace holds svc/.github/... (the verifier's nested go.mod
+          # files, which mark module boundaries for `go mod tidy`). The action
+          # leaves hidden paths out unless told, and the model's job then
+          # fails its manifest check (probe P4's first run, 2026-11-15).
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
 

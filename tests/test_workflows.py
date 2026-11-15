@@ -317,3 +317,74 @@ class RevealWorkflowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkspaceArtifactTest(unittest.TestCase):
+    """The model's workspace reaches the model's job whole.
+
+    Probe P4's first run (2026-11-15): `prepare` listed svc/.github/.../go.mod
+    in the manifest (the verifier's nested modules, which mark module
+    boundaries for `go mod tidy`), upload-artifact left hidden paths out, and
+    the model's job failed its manifest check. svc-hello carries the same
+    files once class-scope is merged, so every real run would have failed."""
+
+    def uploads(self, name):
+        wf = load(name)
+        return [s for j in wf["jobs"].values() for s in j.get("steps", [])
+                if str(s.get("uses", "")).startswith("actions/upload-artifact@")
+                and (s.get("with") or {}).get("name") == "agent-input"]
+
+    def test_the_workspace_upload_keeps_hidden_paths(self):
+        for name in ("agent.yml", "agent-p4.yml"):
+            if not (ROOT / ".github/workflows" / name).exists():
+                continue   # agent-p4.yml is there only for the length of probe P4
+            ups = self.uploads(name)
+            self.assertEqual(len(ups), 1, name)
+            self.assertIs(ups[0]["with"].get("include-hidden-files"), True, name)
+
+    def test_the_manifest_lists_what_the_upload_would_have_dropped(self):
+        """The check that failed is the right one: a hidden path in the
+        workspace is in the manifest, so a dropped file cannot go unnoticed."""
+        import subprocess, tempfile
+        from factory import prepare
+        with tempfile.TemporaryDirectory() as d:
+            run = lambda *a: subprocess.run(["git", *a], cwd=d, check=True, capture_output=True)
+            run("init", "-q")
+            for path, text in (("go.mod", "module m\n"), ("go.sum", ""), ("main.go", "package main\n"),
+                               (".github/x/testdata/a/go.mod", "module a\n")):
+                p = Path(d) / path
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(text)
+            run("add", "-A")
+            run("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "t")
+            sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=d, check=True, capture_output=True,
+                                 text=True).stdout.strip()
+            self.assertIn(".github/x/testdata/a/go.mod", prepare.module_files(d, sha))
+
+
+class P4FormTest(unittest.TestCase):
+    """agent-p4.yml is agent.yml with the listed differences and no others,
+    so what P4 shows about the model's job and the opening job holds for the
+    real workflow."""
+
+    def setUp(self):
+        if not (ROOT / ".github/workflows/agent-p4.yml").exists():
+            self.skipTest("agent-p4.yml is there only for the length of probe P4")
+        self.real, self.p4 = load("agent.yml"), load("agent-p4.yml")
+
+    def test_only_the_listed_differences(self):
+        r, p = self.real["jobs"], self.p4["jobs"]
+        self.assertEqual(list(p), ["guard", "prepare", "agent", "open", "c21-record"])
+        self.assertEqual(p["guard"], r["guard"])
+        self.assertEqual(p["agent"], r["agent"])            # the model's job, unchanged
+        self.assertEqual(p["c21-record"], r["c21-record"])
+        prep = dict(r["prepare"], needs="guard")
+        prep["if"] = "needs.guard.outputs.ready == 'true'"
+        self.assertEqual(p["prepare"], prep)
+        as_real = json.loads(json.dumps(p["open"]).replace("m4-probe", "svc-hello"))
+        self.assertEqual(as_real, r["open"])
+        self.assertEqual(set(self.p4["on"]), {"workflow_dispatch"})           # no schedule
+        self.assertEqual(self.p4["on"]["workflow_dispatch"], self.real["on"]["workflow_dispatch"])
+        self.assertEqual(self.p4["env"], {"CLASS_FILE": "probe/p4-class.yaml", "RECORDS_BRANCH": "records-p4"})
+        self.assertEqual(self.p4["concurrency"], self.real["concurrency"])
+        self.assertEqual(self.p4["permissions"], self.real["permissions"])

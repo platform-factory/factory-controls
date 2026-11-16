@@ -1,0 +1,65 @@
+# The clock: starts detector.yml, agent.yml and scorecard.yml at the minutes
+# their own cron lines name.
+#
+# Why it exists: GitHub starts no `schedule` run in this organisation. For
+# more than five hours on 2026-11-15/16 the detector's cron, and a
+# five-minute cron in a do-nothing probe workflow on another repository,
+# produced no run, while both files ran when dispatched. No documented cause
+# applies. The detector and the agent's workflow are the whole of M4's
+# machinery in motion, so something has to keep the time.
+#
+# How: one job sleeps and, at each minute a cron line names, sends that
+# workflow a `workflow_dispatch` on main (factory/clock.py). After five
+# hours it dispatches this workflow again with the time it had reached and
+# ends, so the next run takes up where it stopped. It is started once by
+# hand (`gh workflow run clock.yml`) and again by hand if a run is cancelled
+# or lost; until then nothing runs, which fails safe, because the merge step
+# refuses without a detector heartbeat younger than thirty minutes.
+#
+# What it holds: `actions: write` on this repository, to dispatch, and
+# `contents: read`, to read the cron lines. No App key, no environment, no
+# secret. Each workflow it starts takes its own guard, environment and
+# concurrency group, as on a cron or a hand dispatch. A dispatch sent with
+# this job's token shows `github-actions[bot]` as the run's actor.
+name: clock
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "set by the previous run's handover; leave empty when starting by hand"
+        required: false
+        default: ""
+
+permissions: {}
+
+# One clock at a time. The run that hands over ends right after it
+# dispatches the next, which waits here until then.
+concurrency:
+  group: clock
+  cancel-in-progress: false
+
+jobs:
+  clock:
+    name: clock
+    # Only from main: the workflows it starts read their keys from
+    # environments that only main may enter, and the times are main's.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    permissions:
+      actions: write    # dispatch the three workflows, and this one again
+      contents: read    # this repository: the cron lines and factory/clock.py
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: keep the time
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SINCE: ${{ inputs.since }}
+        run: |
+          python3 -m factory.clock \
+            --workflow detector.yml --workflow agent.yml --workflow scorecard.yml \
+            --since "$SINCE" --run-minutes 300

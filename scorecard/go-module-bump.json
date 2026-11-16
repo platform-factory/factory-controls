@@ -1,0 +1,210 @@
+{
+  "as_of": {
+    "latest_event_at": "2026-11-16T03:14:14Z",
+    "main_sha": "cb6e4affd687258391311880afc54e7229151ee2"
+  },
+  "attribution": {
+    "delay_minutes": {
+      "each": {},
+      "max": null,
+      "median": null,
+      "not_raised": [],
+      "pass_line": 60,
+      "within_pass_line": null
+    },
+    "detected": 0,
+    "detected_injected": {
+      "a": [],
+      "b": []
+    },
+    "injected": {
+      "a": [],
+      "b": []
+    },
+    "precision": null,
+    "recall": null,
+    "recall_by_type": {
+      "a": null,
+      "b": null
+    },
+    "true_positives": 0
+  },
+  "changes": {
+    "first_agent_pr_at": null,
+    "fixture_prs": [],
+    "merged": 0,
+    "near_misses": 0,
+    "open": [],
+    "queue_item_prs": 0,
+    "seeds": 0,
+    "window_closes_at": null
+  },
+  "changes_after_switch_on": {
+    "controls_commits": [],
+    "note": "no switch-on record found in platform-factory/.github rulesets/svc-hello/ (file name ending -after-l1-switch-on.json)",
+    "ruleset_events": [],
+    "ruleset_records": [],
+    "svc_commits": [],
+    "switch_on_at": null
+  },
+  "class": "go-module-bump",
+  "class_file_commit": "de36a84ce36e50fbb197e41fa24bc1794fc81b5c",
+  "escapes": {
+    "a": [],
+    "b": [],
+    "c": "not run in M4 (ADR-0024 §2)",
+    "counts": {
+      "a": 0,
+      "b": 0
+    }
+  },
+  "fixtures": [],
+  "harness": [],
+  "human_entered_fields": [
+    {
+      "field": "reviewing",
+      "kind": "measurement",
+      "source": "the listed human's `reviewing` labeled event",
+      "why": "C-16's review minutes start at it"
+    },
+    {
+      "field": "entered_minutes",
+      "kind": "measurement",
+      "source": "`minutes:` in the review form",
+      "why": "C-16 asks for the reviewer's own minutes beside the measured ones"
+    },
+    {
+      "field": "sections",
+      "kind": "measurement",
+      "source": "`sections:` in the review form",
+      "why": "C-16 asks which packet sections were used"
+    },
+    {
+      "field": "close",
+      "kind": "human classification the design intends",
+      "source": "the listed human's close of a queue-item pull request",
+      "why": "the review rule's close is a near-miss"
+    },
+    {
+      "field": "escape:revert",
+      "kind": "human classification the design intends",
+      "source": "the listed human's `escape:revert` labeled event",
+      "why": "escape type (b) rests on a person's label"
+    },
+    {
+      "field": "human-cleared",
+      "kind": "human classification the design intends",
+      "source": "the listed human's `human-cleared` labeled event",
+      "why": "a clearable inconclusive is cleared by a person"
+    }
+  ],
+  "inconclusives": {
+    "by_reason_prs": {},
+    "by_reason_runs": {},
+    "cleared_prs": [],
+    "forced_prs": [],
+    "natural_prs": []
+  },
+  "inputs_sha256": "64f46d15fdf72b10981da125150cdc8cfb54e73ad2c044f88226197398272504",
+  "model": [],
+  "n": 20,
+  "near_misses": [],
+  "not_run": {
+    "c25": "not run (ADR-0017)",
+    "escape_c": "spine-attributed incident: not run in M4 (ADR-0024 §2)"
+  },
+  "pins": {
+    "builder_image": "golang:1.27.1-alpine3.24@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414",
+    "harness": {
+      "name": "claude-code",
+      "platform": "linux-x64-musl",
+      "sha256": "9bed6cfc5d2420b673a0b9fe41c71533a02904935cbc3b4cd110302d475fee6f",
+      "version": "2.1.322"
+    },
+    "model": "claude-sonnet-5-5",
+    "skill": {
+      "commit": "2d7735aa2d3b29e22be59eed7b2116cdde465f13",
+      "tag": "go-module-bump/v1.0.0"
+    }
+  },
+  "promotion": {
+    "blockers": [
+      "the live rung entry is -1, not L1",
+      "streak 0 is below N = 20"
+    ],
+    "due": false,
+    "n": 20,
+    "streak": 0,
+    "streak_prs": []
+  },
+  "prs": [],
+  "repo": "platform-factory/svc-hello",
+  "review_form": "`decision` repeats the review's own state and is checked against it; `reason` is free text the scorecard copies and does not read.",
+  "reviews": {
+    "beyond_falsifier": null,
+    "count_in_median": 0,
+    "decision_mismatches": [],
+    "falsifier_minutes": 15,
+    "invalid_forms": [],
+    "median_cutoff": null,
+    "median_entered_minutes": null,
+    "median_measured_minutes": null,
+    "median_upper_bound_minutes": null,
+    "pass_line_minutes": 5,
+    "within_pass_line": null
+  },
+  "rung": {
+    "by_records_now": "L1",
+    "l2_accepted": false,
+    "latest_record": null,
+    "live_level": "unknown",
+    "live_minimum_approvals": -1
+  },
+  "schema": 1,
+  "seeds": {
+    "caught": [],
+    "identified_by": "seed records",
+    "key_matches_hash": null,
+    "key_published": false,
+    "missed": [],
+    "not_run_positions": null,
+    "schedule": null,
+    "skipped_at_l2_positions": null,
+    "undecided": [],
+    "void": []
+  },
+  "shadow_verdicts": {
+    "agree": [],
+    "by_verdict": {
+      "close": [],
+      "merge": [],
+      "wait": []
+    },
+    "disagree": [],
+    "l1_prs": 0,
+    "no_decision": []
+  },
+  "skill_releases": [],
+  "streak": {
+    "current": 0,
+    "history": [],
+    "max": 0,
+    "promotable": false,
+    "resets": [],
+    "start": null
+  },
+  "unknowns": {
+    "class_records": [],
+    "count": 0,
+    "detector": [],
+    "label_events": []
+  },
+  "usage_totals": {
+    "agent_minutes": 0,
+    "ci_minutes": 0,
+    "input_tokens": 0,
+    "output_tokens": 0
+  },
+  "verifier_versions": [],
+  "withheld_prs": []
+}

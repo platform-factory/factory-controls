@@ -320,9 +320,10 @@ step 7. The delegate commits the files to `platform-factory/.github`.
 
 ### The clock (the delegate; not a human step)
 
-GitHub starts no `schedule` run in this organisation, so the cron lines in
-`detector.yml`, `agent.yml` and `scorecard.yml` start nothing by themselves
-(`factory/clock.py` says what was observed). `clock.yml` is one job that
+GitHub starts almost no `schedule` run in this organisation, so the cron
+lines in `detector.yml`, `agent.yml` and `scorecard.yml` cannot be relied on
+(`factory/clock.py` says what was observed: one run of about seventy due).
+A stray `schedule` run beside the clock's is harmless. `clock.yml` is one job that
 dispatches each of the three on `main` at the minutes its cron line names,
 and after five hours dispatches itself again. Start it once, after step 7's
 merge and before step 8:
@@ -340,7 +341,8 @@ disabled workflow is refused and logged as a warning, so `agent.yml` starts
 running the moment it is enabled and stops the moment it is disabled.
 
 If a clock run is cancelled, fails or is lost, nothing is dispatched until
-it is started again with the same command. Check it whenever a detector run
+it is started again with the same command, and a rare `schedule` run is no
+substitute. Check it whenever a detector run
 is more than fifteen minutes old. Every start by hand, with its time and
 the reason, goes into `$EVIDENCE/25-clock-starts.txt` and into M4's entry.
 To stop the clock: `gh run cancel <run id> --repo "$R"`.

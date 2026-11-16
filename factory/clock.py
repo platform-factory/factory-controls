@@ -1,14 +1,17 @@
 """The clock: starts the class's timed workflows when GitHub does not.
 
 Why: the detector, the agent's workflow and the scorecard each carry a cron
-line, and in this organisation GitHub started no run from one. Between
+line, and in this organisation GitHub starts almost no run from one. Between
 2026-11-15T22:05Z and 2026-11-16T03:45Z the detector's ten-minute cron and a
 five-minute cron in a do-nothing probe workflow produced no `schedule` run
-at all, while the same files ran when dispatched. The documented causes (a
-disabled workflow, a file off the default branch, sixty idle days, a fork, a
-suspended account) do not apply, and GitHub's status page showed no
-incident. A second probe showed that a job holding only `actions: write`
-can dispatch another workflow, and itself.
+at all, while the same files ran when dispatched. By 2026-11-16T12:00Z each
+had produced one: the detector at 07:13Z, of about seventy due, and the
+probe at 11:43Z, of about a hundred due; the scorecard's daily line had
+produced none at its hour. The documented causes (a disabled workflow, a
+file off the default branch, sixty idle days, a fork, a suspended account)
+do not apply, and GitHub's status page showed no incident. A second probe
+showed that a job holding only `actions: write` can dispatch another
+workflow, and itself.
 
 So one long-running job keeps the time. It reads the cron line of each
 workflow it is told about, sleeps, and at each minute a cron line names it
@@ -28,7 +31,7 @@ Then nothing runs until someone dispatches clock.yml again. That fails
 safe: the merge step refuses to merge without a detector heartbeat younger
 than thirty minutes, and it only runs when something starts it.
 
-If GitHub does begin to start `schedule` runs, a workflow runs twice at its
+When GitHub does start a `schedule` run, that workflow runs twice at that
 minute. The concurrency groups already put such runs in a line, and every
 job is written to be run at any time.
 """

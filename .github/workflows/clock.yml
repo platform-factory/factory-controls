@@ -1,12 +1,13 @@
 # The clock: starts detector.yml, agent.yml and scorecard.yml at the minutes
 # their own cron lines name.
 #
-# Why it exists: GitHub starts no `schedule` run in this organisation. For
-# more than five hours on 2026-11-15/16 the detector's cron, and a
-# five-minute cron in a do-nothing probe workflow on another repository,
-# produced no run, while both files ran when dispatched. No documented cause
-# applies. The detector and the agent's workflow are the whole of M4's
-# machinery in motion, so something has to keep the time.
+# Why it exists: GitHub starts almost no `schedule` run in this
+# organisation. Up to 2026-11-16T12:00Z the detector's ten-minute cron had
+# started one run where about seventy were due, and a five-minute cron in a
+# do-nothing probe workflow on another repository one where about a hundred
+# were due, while both files ran every time they were dispatched. No
+# documented cause applies. The detector and the agent's workflow are the
+# whole of M4's machinery in motion, so something has to keep the time.
 #
 # How: one job sleeps and, at each minute a cron line names, sends that
 # workflow a `workflow_dispatch` on main (factory/clock.py). After five

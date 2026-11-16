@@ -43,6 +43,10 @@ SYNC = "golang.org/x/sync"
 MODULES = {"merge_step": merge_step, "open_pr": op, "prepare": pp, "fixtures": fx, "detector": detector,
            "reveal": rv, "scorecard": sc, "guard": guard}
 INVOCATION = re.compile(r"python3 -m factory\.(\w+)(.*)$")
+# The clock reads no class file and takes no part in the class's state: it
+# only dispatches the workflows whose own first job is the guard. Its
+# arguments and its workflow are checked in tests/test_clock.py.
+NOT_THE_CLASS = {"clock"}
 # Values for the shell variables the workflows put on a command line.
 SHELL_VALUES = {"FIXTURE_CASE": "c15-readme", "RUNNER_TEMP": "/runner/temp"}
 SKILL_TAG = "go-module-bump/v0.1.0-rc.1"
@@ -58,7 +62,7 @@ def invocations() -> list[tuple[str, str, str]]:
             if s.startswith("#"):
                 continue
             m = INVOCATION.search(s)
-            if m:
+            if m and m.group(1) not in NOT_THE_CLASS:
                 out.append((f.name, m.group(1), m.group(2).strip()))
     return out
 

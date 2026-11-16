@@ -155,8 +155,10 @@ factory/                      Python, standard library only
   open_pr.py                  artifact intake, commit, pull request, run record; seed settlement
   reveal.py                   publishes SEED_KEY at the close and checks every body
   guard.py                    stops a workflow run while the class file is absent or holds a placeholder
+  clock.py                    dispatches the timed workflows at their cron minutes; GitHub starts almost no `schedule` run here
 agent/                        shipped into the model's job: prompt, run script, the hook (Go)
 .github/workflows/detector.yml
+.github/workflows/clock.yml   one long job that starts detector.yml, agent.yml and scorecard.yml on time
 .github/workflows/agent.yml   pre-merge, merge, prepare, agent, open
 .github/workflows/reveal.yml  dispatch only, at the close
 tests/                        offline unit tests over hand-written API JSON
@@ -224,6 +226,12 @@ first run settles it:
 - That the run record is on the records branch before `class-scope`'s
   first run reads it for the packet's "opened by" line; it is written right
   after the pull request opens, and class-scope re-runs on later events.
-- In a public repository, scheduled workflows stop after 60 days without
-  activity, so a quiet stretch would stop the detector; the merge step's
-  heartbeat check then refuses every merge.
+- GitHub starts almost no `schedule` run in this organisation (observed
+  2026-11-15/16: one run of about seventy due; cause not found;
+  `factory/clock.py` has the details), so the cron lines alone cannot keep
+  a thirty-minute heartbeat. `clock.yml` dispatches the three timed
+  workflows instead. It is started by hand and cannot restart itself after a
+  cancelled or lost run; until someone dispatches it again almost nothing
+  runs, and the merge step's heartbeat check refuses every merge. Were the
+  cron lines to start working, the same 60-day rule for public repositories
+  would apply to them.

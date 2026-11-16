@@ -289,7 +289,7 @@ Until this merge, every workflow that runs the class stops at its first job,
 `fixtures.yml` and `reveal.yml` if dispatched. No App token is minted, no
 environment entered, nothing written. Every CLI those workflows run does the
 same by itself when run by hand: one notice line, exit 0, no request. From
-this merge on they run their jobs on every schedule. Until the Apps are installed on `svc-hello`
+this merge on they run their jobs at every start (by the clock, see below). Until the Apps are installed on `svc-hello`
 (step 8), the detector's and the agent's workflows fail at their App token
 step and write nothing; the scorecard, which holds no App token, runs and
 writes its files to the records branch. The agent's workflow opens queue
@@ -317,6 +317,35 @@ gh api repos/platform-factory/svc-hello/rulesets --jq '.[] | {id, name, enforcem
 Expected: the listing shows `main-protection` as it was and `class-wall`
 disabled. The id (`jq .id` on the after-file) fills `WALL-RULESET-ID` in
 step 7. The delegate commits the files to `platform-factory/.github`.
+
+### The clock (the delegate; not a human step)
+
+GitHub starts almost no `schedule` run in this organisation, so the cron
+lines in `detector.yml`, `agent.yml` and `scorecard.yml` cannot be relied on
+(`factory/clock.py` says what was observed: one run of about seventy due).
+A stray `schedule` run beside the clock's is harmless. `clock.yml` is one job that
+dispatches each of the three on `main` at the minutes its cron line names,
+and after five hours dispatches itself again. Start it once, after step 7's
+merge and before step 8:
+
+```sh
+R=platform-factory/factory-controls
+gh workflow run clock.yml --repo "$R" --ref main
+gh run list --workflow clock.yml --repo "$R" --limit 3
+gh run list --workflow detector.yml --repo "$R" --limit 3    # one new run within ten minutes
+```
+
+Expected: exactly one `clock` run in progress; its log names each dispatch
+(`clock: <time> dispatched detector.yml for HH:MM`). A dispatch to a
+disabled workflow is refused and logged as a warning, so `agent.yml` starts
+running the moment it is enabled and stops the moment it is disabled.
+
+If a clock run is cancelled, fails or is lost, nothing is dispatched until
+it is started again with the same command, and a rare `schedule` run is no
+substitute. Check it whenever a detector run
+is more than fifteen minutes old. Every start by hand, with its time and
+the reason, goes into `$EVIDENCE/25-clock-starts.txt` and into M4's entry.
+To stop the clock: `gh run cancel <run id> --repo "$R"`.
 
 ### The L1 switch-on (the delegate; not a human step)
 

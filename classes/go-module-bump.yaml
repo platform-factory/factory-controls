@@ -207,8 +207,8 @@ agent:
 skill:
   repo: platform-factory/platform-knowledge
   path: skills/go-module-bump/SKILL.md
-  tag: "go-module-bump/v0.1.0-rc.1"
-  commit: "f136c2d72d8c8e88b358e7d938f48f0619c9dfc3"
+  tag: "go-module-bump/v1.0.0"
+  commit: "2d7735aa2d3b29e22be59eed7b2116cdde465f13"
 
 # Two rulesets on svc-hello's default branch, and the committed bodies the
 # detector compares the live ones with. ADR-0024 §4 put the rung entry and the

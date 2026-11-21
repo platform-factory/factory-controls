@@ -59,9 +59,14 @@ on `m4-probe`, each of these reads returned 200: workflow runs, check runs
 on a commit, file contents, a compare, a pull request's reviews, its issue
 events, the rulesets list and the artifacts list. So the agent App's
 manifest stays as it is. The ratchet App holds no `contents` permission and
-was not installed on `m4-probe`, so its reads of file contents and compares
-are still untried; the detector's `--dry-run` with its token, right after
-human step 8, is where they are first made.
+was not installed on `m4-probe`, so its reads of file contents
+are still untried. A dry run with its token cannot be made: its key is kept
+nowhere but the `ratchet` environment, and `detector.yml` has no dry-run
+input. The first detector run after human step 8, which the delegate reads
+before anything else (`docs/RUNBOOK.md`, step 8), makes two of them: the
+branch read and `go.mod`'s contents. The detector's read of a commit and of
+the class's files at it is made only for an escape (b), so it is first made
+at injection (b). The detector makes no compare.
 
 ## Registering one (the owner, in the browser)
 

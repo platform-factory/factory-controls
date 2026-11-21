@@ -29,6 +29,7 @@ NOTE_ATTEMPTS = {
     "C-20: applies human-cleared": "c20-apply-human-cleared",
     "C-20: applies an unrelated label": "c20-apply-unrelated-label",
     "C-20: removes needs-human": "c20-remove-needs-human",
+    "C-20: each merge attempt is refused and recorded (correction 12)": "c20-merge-inconclusive",
     "C-21: a push to main (push output, rule suite)": "c21-push-main",
     "C-21: a branch adding .github/workflows/x.yml, by push": "c21-workflow-push",
     "C-21: a branch adding .github/workflows/x.yml, by the contents API": "c21-workflow-contents-api",
@@ -68,6 +69,9 @@ class FixtureWorld(ScoreWorld):
         self.pr_checks_complete = True
         self.graphql_calls = []
         self.merge_status = 405
+        self.merge_message = "Repository rule violations found"
+        self.merge_state = "BLOCKED"
+        self.on_merge = None
         self.ruleset_put_status = 403
         self.on_label = None
         self.next_oid = 0
@@ -98,10 +102,12 @@ class FixtureWorld(ScoreWorld):
         g.route("POST", rf"repos/{s}/pulls", new_pr)
 
         def merge(m, p, b):
+            if self.on_merge:
+                self.on_merge(int(m.group(1)))
             if self.merge_status == 200:
                 self.prs[int(m.group(1))]["merged_at"] = at(50)
                 return {"merged": True}
-            return ApiError(self.merge_status, {"message": "Repository rule violations found"}, m.group(0))
+            return ApiError(self.merge_status, {"message": self.merge_message}, m.group(0))
 
         g.route("PUT", rf"repos/{s}/pulls/(\d+)/merge", merge)
         g.route("PUT", rf"repos/{s}/rulesets/20204893", lambda m, p, b: (
@@ -163,8 +169,26 @@ class FixtureWorld(ScoreWorld):
         decision = "APPROVED" if any(r["state"] == "APPROVED" and r["commit"]["oid"] == pr["head"]["sha"]
                                      for r in reviews) else "REVIEW_REQUIRED"
         return {"repository": {"pullRequest": {"number": n, "state": "OPEN", "headRefOid": pr["head"]["sha"],
-                                               "reviewDecision": decision, "mergeStateStatus": "BLOCKED",
+                                               "reviewDecision": decision, "mergeStateStatus": self.merge_state,
                                                "mergeable": "MERGEABLE", "reviews": {"nodes": reviews}}}}
+
+
+class Spy:
+    """Stands for one token: passes every call on and notes the writes sent through it."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.sent = []
+
+    def __getattr__(self, name):
+        attr = getattr(self.inner, name)
+        if name not in ("post", "put", "patch", "delete"):
+            return attr
+
+        def send(path, body=None):
+            self.sent.append((name.upper(), path))
+            return attr(path, body)
+        return send
 
 
 class FakeClock:
@@ -398,6 +422,112 @@ class LabelCaseTest(unittest.TestCase):
         rec, _ = run(w, "c20-remove-needs-human", pr="5")
         self.assertEqual(rec["outcome"], "incomplete")
         self.assertIn("M4_FORCE_INCONCLUSIVE", rec["observed"])
+
+    def test_c20_merge_of_the_forced_inconclusive_is_refused_and_the_item_is_left_alone(self):
+        w = self.forced()
+        w.gt(w.prs[5]["head"]["sha"], "success", 1, 3)
+        rec, out = run(w, "c20-merge-inconclusive", pr="5")
+        self.assertEqual(rec["outcome"], "as-expected")
+        r = rec["result"]
+        self.assertEqual(r["merge"]["status"], 405)
+        self.assertEqual((r["pr_status"]["reviewDecision"], r["pr_status"]["mergeStateStatus"]),
+                         ("REVIEW_REQUIRED", "BLOCKED"))
+        self.assertEqual(r["after"]["checks"]["class_scope"]["verdict"], "inconclusive")
+        # The merge was asked for once, with the head class-scope judged.
+        merges = [c for c in w.gh.writes("PUT") if c["path"].endswith("/pulls/5/merge")]
+        self.assertEqual([(c["body"]["sha"], c["body"]["merge_method"]) for c in merges],
+                         [(w.prs[5]["head"]["sha"], "squash")])
+        self.assertIn("head level with main", rec["observed"])
+        # What main would show if GitHub did merge it says what it was: a queue item, not a fixture's own.
+        self.assertIn("a forced inconclusive, must be refused", merges[0]["body"]["commit_title"])
+        self.assertIn("queue-item pull request #5", merges[0]["body"]["commit_message"])
+        # The queue item is not closed, no branch is deleted, and it is not marked as a fixture's own
+        # pull request (state.py reads pr_number to leave fixture pull requests out of the queue).
+        self.assertEqual(w.prs[5]["state"], "open")
+        self.assertEqual(rec["restoration"]["actions"], [])
+        self.assertIsNone(rec["pr_number"])
+        self.assertEqual(w.gh.writes("PATCH") + w.gh.writes("DELETE"), [])
+        self.assertNotIn("issue", out)
+
+    def test_c20_merge_of_the_forced_inconclusive_that_merges_stops_the_run(self):
+        w = self.forced()
+        w.gt(w.prs[5]["head"]["sha"], "success", 1, 3)
+        w.merge_status = 200
+        rec, out = run(w, "c20-merge-inconclusive", pr="5")
+        self.assertEqual(rec["outcome"], "unexpected")
+        self.assertIn("C-20's falsifier", rec["restoration"]["manual"])
+        self.assertEqual(rec["restoration"]["actions"], [])   # no second write to "fix" it
+        self.assertEqual(len(w.issues), 1)
+
+    def test_c20_merge_is_asked_by_the_agent_apps_token_and_nothing_else_is_written_with_it(self):
+        w = self.forced()
+        w.gt(w.prs[5]["head"]["sha"], "success", 1, 3)
+        ctx = ctx_for(w, "c20-merge-inconclusive", pr="5")
+        ctx.act = Spy(w.gh)                        # the agent App's token; ctx.read stays the workflow's
+        rec = fx.run_case(fx.CASES["c20-merge-inconclusive"], ctx)
+        self.assertEqual(rec["outcome"], "as-expected")
+        self.assertEqual(ctx.act.sent, [("PUT", f"repos/{SVC}/pulls/5/merge")])
+        self.assertEqual([a["token"] for a in rec["attempts"] if a["method"] == "PUT"], ["agent-app"])
+
+    def test_c20_merge_asks_nothing_unless_class_scope_is_the_one_thing_in_the_way(self):
+        def asked(w):
+            return [c for c in w.gh.writes("PUT") if c["path"].endswith("/merge")]
+
+        w = self.forced()                          # go-test has not reported on the head
+        rec, _ = run(w, "c20-merge-inconclusive", pr="5")
+        self.assertEqual((rec["outcome"], asked(w)), ("incomplete", []))
+        self.assertIn("go-test", rec["observed"])
+
+        w = self.forced()                          # go-test failed: it would refuse the merge by itself
+        w.gt(w.prs[5]["head"]["sha"], "failure", 1, 3)
+        rec, _ = run(w, "c20-merge-inconclusive", pr="5")
+        self.assertEqual((rec["outcome"], asked(w)), ("incomplete", []))
+
+        w = self.forced()                          # the head is behind main: the strict rule would refuse
+        w.gt(w.prs[5]["head"]["sha"], "success", 1, 3)
+        w.behind[w.prs[5]["head"]["sha"]] = 1
+        rec, _ = run(w, "c20-merge-inconclusive", pr="5")
+        self.assertEqual((rec["outcome"], asked(w)), ("incomplete", []))
+        self.assertIn("behind main", rec["observed"])
+
+        w = self.forced()                          # GitHub has not settled the merge box
+        w.gt(w.prs[5]["head"]["sha"], "success", 1, 3)
+        w.merge_state = "UNKNOWN"
+        rec, _ = run(w, "c20-merge-inconclusive", pr="5")
+        self.assertEqual((rec["outcome"], asked(w)), ("incomplete", []))
+
+    def test_c20_merge_refusal_counts_only_when_it_is_a_rules(self):
+        def ready():
+            w = self.forced()
+            w.gt(w.prs[5]["head"]["sha"], "success", 1, 3)
+            return w
+
+        w = ready()
+        w.merge_status = 409                       # the head moved: not a rule's refusal
+        rec, _ = run(w, "c20-merge-inconclusive", pr="5")
+        self.assertEqual(rec["outcome"], "incomplete")
+        self.assertEqual(w.prs[5]["state"], "open")
+
+        w = ready()                                # probe P3's other 405: main moved under the request
+        w.merge_message = "Base branch was modified. Review and try the merge again."
+        rec, _ = run(w, "c20-merge-inconclusive", pr="5")
+        self.assertEqual(rec["outcome"], "incomplete")
+        self.assertIn("main moved", rec["observed"])
+
+        w = ready()                                # class-scope re-ran and passed while the call was made
+        head = w.prs[5]["head"]["sha"]
+        w.on_merge = lambda n: w.cs(head, "pass", 40, 41, codes=["forced", "cleared"])
+        rec, _ = run(w, "c20-merge-inconclusive", pr="5")
+        self.assertEqual(rec["outcome"], "incomplete")
+        self.assertIn("not shown to be the forced inconclusive's", rec["observed"])
+
+    def test_c20_merge_needs_the_forced_inconclusive(self):
+        w = FixtureWorld()
+        w.item(5, 1, SYNC, "v0.18.0", 0)
+        w.cs(w.prs[5]["head"]["sha"], "pass", 1, 2)
+        rec, _ = run(w, "c20-merge-inconclusive", pr="5")
+        self.assertEqual(rec["outcome"], "incomplete")
+        self.assertEqual([c for c in w.gh.writes("PUT") if c["path"].endswith("/merge")], [])
 
     def test_c21_removing_the_humans_label_leaves_it_in_force(self):
         w = FixtureWorld()

@@ -60,7 +60,7 @@ two-space indentation. Times are UTC, ISO 8601 with a `Z`.
 | `merge-step/<run_id>-<attempt>-<phase>.json` | merge step | scorecard, C-15's data |
 | `seeds/<pr_number>.json` | `open` job, when it closes a seed | state |
 | `fixtures/<fixture_id>.json` | fixtures workflow | state, scorecard |
-| `scorecard/go-module-bump.json`, `.md` | scorecard | people |
+| `scorecard/go-module-bump.json`, `.md`, `.inputs.json` | scorecard | people; the merge step (the inputs file: when the scorecard last made its reads) |
 | `close/seed-key.json` | reveal job | people, scorecard |
 
 ### `runs/<controls_run_id>-<attempt>.json`, schema 1
@@ -118,7 +118,7 @@ The merge step refuses while `completed_at` is more than
 
 ```json
 {"schema": 1, "completed_at": "2026-11-20T10:14:52Z", "run_id": "123", "run_attempt": "1",
- "acted": ["escape-a-pr41"], "ruleset_ok": true, "rung": 1,
+ "acted": ["escape-a-pr41"], "retried": [], "ruleset_ok": true, "rung": 1,
  "pending": [{"key": "escape-a-pr42", "pr": 42, "deadline": "2026-11-20T10:44:00Z"}],
  "unknowns": [{"type": "label-event-not-counted", "pr": 50, "label": "escape:revert", "...": "..."}]}
 ```

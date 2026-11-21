@@ -17,24 +17,59 @@ stops until the case's restoration is done and recorded.
 
 ## When each case runs
 
+A case can run only when what it acts on exists, so C-21's cases do not all
+run in one sitting (the readiness note's correction 11):
+
 | When | Cases | Input |
 |---|---|---|
-| After the L1 switch-on and the Apps' installation (plan 7.1) | every `c21-*` case | `pr` where named below |
-| On queue item 1, while `M4_FORCE_INCONCLUSIVE` forces it, before the listed human clears it (plan 7.3) | `c20-apply-human-cleared`, `c20-apply-unrelated-label`, `c20-remove-needs-human` | `pr` = queue item 1 |
-| At L2, after the first L2 merge (plan 9.3) | every `c15-*` case | `pr` for `c15-push-onto-person-pr` |
+| After the L1 switch-on and the Apps' installation, before queue item 1 opens | `c21-ruleset-put`, `c21-check-run`, `c21-commit-status`, `c21-set-force-variable` (before the forcing variable is set: an existing variable answers 409, which would read as a refusal), `c21-read-controls-secrets`, the four `c21-write-*`, `c21-workflow-push`, `c21-workflow-contents-api`, `c21-push-main`, `c21-approve-own-pr`, `c21-approve-other-pr`, `c21-push-after-approval` (both phases) | `pr` for `c21-approve-other-pr` and for `phase=push` |
+| On queue item 1, while `M4_FORCE_INCONCLUSIVE` forces it, before the listed human clears it | `c20-apply-human-cleared`, `c20-apply-unrelated-label`, `c20-remove-needs-human`, `c20-merge-inconclusive`, `c21-apply-seeded`, `c21-edit-packet-comment`, then `c21-delete-packet-comment` | `pr` = queue item 1 |
+| On queue item 1, after the listed human's `human-cleared` and before the delegate deletes the variable | `c21-remove-human-cleared` | `pr` = queue item 1 |
+| At L2, after the first L2 merge | every `c15-*` case | `pr` for `c15-push-onto-person-pr` |
+| At L2, on the forced inconclusive, before the listed human clears it | `c20-merge-inconclusive` | `pr` = that queue item |
+| At L2, on injection (b)'s revert pull request, which carries the listed human's `escape:revert` | `c21-remove-escape-revert`, then `c21-delete-label-definition` | `pr` = the revert pull request, for both |
+
+`c21-remove-human-cleared` runs while the variable is still set because only
+then does class-scope's pass rest on the clearance: once the variable is
+deleted the item passes with or without the label, and the case would show
+nothing. The two `escape:revert` cases wait for L2 because no pull request
+carries that label before injection (b); if L2 is not reached they are not
+run, and M4's entry says so.
+
+Dispatch one case at a time and read its record before the next. Before a
+case that names a pull request, wait until every `class-scope` check run on
+that pull request's head is completed
+(`gh api "repos/platform-factory/svc-hello/commits/<head>/check-runs?check_name=class-scope&filter=all" --jq '[.check_runs[].status]'`):
+a label event from a person or an App starts a class-scope run, the
+fixtures' own restorations included, and a case that reads "before" while
+one is still running records a change of verdict that did not happen. A fixture's own pull request left
+open (`c21-push-after-approval` between its two phases) counts as an open
+agent pull request, so the agent's workflow opens and merges nothing until
+it is closed: finish both phases before `agent.yml` is enabled.
 
 Inputs: `c15-push-onto-person-pr` and `c21-approve-other-pr` take an open
-pull request a person opened into `main`; `c21-remove-human-cleared` one
-carrying the listed human's `human-cleared`; `c21-remove-escape-revert` and,
-optionally, `c21-delete-label-definition` one carrying the listed human's
-`escape:revert`; `c21-apply-seeded` an open queue-item pull request;
+pull request a person opened into `main` (for `c21-approve-other-pr` a fresh
+one with no approval and no `human-cleared`, because the case does not check
+its target and a pull request the listed human has already cleared and
+approved would simply merge); `c21-remove-human-cleared` one
+carrying the listed human's `human-cleared`; `c21-remove-escape-revert` and
+`c21-delete-label-definition` one carrying the listed human's
+`escape:revert` (the second accepts a run without `pr`, but then reads
+nothing and its record shows nothing; if the deletion is accepted the
+fixture re-creates the definition and does not put the visible label back on
+the pull request, which no reader uses: the events still show it in force);
+`c20-merge-inconclusive` the forced inconclusive queue item, which it leaves
+open and untouched; `c21-apply-seeded` an open queue-item pull request;
 `c21-edit-packet-comment` and `c21-delete-packet-comment` an open queue-item
 pull request (`pr`): the fixture finds class-scope's packet-link comment on
 it by author `github-actions[bot]` and the marker
 `<!-- class-scope:packet-link -->` on its first line (`comment_id` may name
-it instead). class-scope's next run on that pull request reports the edited
-or missing comment as a tamper in its packet and verdict annotation and
-writes the comment again; `c21-push-after-approval` runs twice,
+it instead). The edit runs before the delete, which removes the comment the
+edit needs. class-scope's next run on that pull request reports the missing
+comment as a tamper in its packet and verdict annotation and writes the
+comment again. The edit is different: the fixture restores the text in the
+same run, class-scope finds nothing changed when it next runs, and the
+fixture's record is the edit's only record; `c21-push-after-approval` runs twice,
 `phase=open`, then, after the listed human approves (`docs/RUNBOOK.md`, step
 11), `phase=push` with `pr` set to the pull request it opened.
 
@@ -60,6 +95,26 @@ L2 only class-scope can refuse, class-scope's verdict by its step names was
 `fail`. A refusal while a check was pending, or with class-scope inconclusive
 or passing, is `incomplete`: the fixture is closed and the case is run again.
 
+`c20-merge-inconclusive` is the one case whose refused merge is on a queue
+item. The merge step never sends an inconclusive to the merge API; it waits.
+The note's runbook has each merge attempt on the forced inconclusive refused
+and recorded, and C-20's pass line has the L2 inconclusive refused by the
+merge API until it is cleared, so this case asks GitHub once per forcing,
+with the agent App's token and the head class-scope judged (the note's
+correction 12). A 405 alone proves nothing: GitHub also answers 405 when
+`main` moved under the request, and a failed go-test or a head behind `main`
+would refuse the merge whatever class-scope said. So the case asks nothing
+unless go-test has passed on the head, the head is level with `main` and the
+merge box reads `BLOCKED`, and it counts the answer only when it is a 405
+that is not the moved-base one and class-scope is still the forced
+inconclusive afterwards. Anything else is `incomplete`, and the case is run
+again. At L1 the rung entry refuses too; at L2 class-scope alone does. No
+probe sent the merge API a pull request with a failed required check, so
+the wording of that refusal is not known beforehand: the record keeps the
+message and is not judged by it. If GitHub merged it, an inconclusive would
+have merged without clearance, which is C-20's falsifier: the record says
+`unexpected` and the run stops.
+
 ## What each case is made safe by
 
 Every attempt is shaped so that if it unexpectedly succeeds it changes as
@@ -75,7 +130,13 @@ the record; `restoration.actions` lists what the fixture itself did;
 - the forcing variable's value names no queue item;
 - the check run and the commit status conclude `failure` on `main`'s tip;
 - labels it applies, approvals it gives and comments it edits are undone
-  by the fixture after the reads; a branch it creates is deleted.
+  by the fixture after the reads; a branch it creates is deleted;
+- the merge it asks for on the forced inconclusive is asked only when
+  class-scope is the one failed check, and carries a commit title and
+  message that say what it was. That one cannot be made harmless: if GitHub
+  merged it, a queue item would have merged without clearance and would
+  count in the streak. The record then says `unexpected`, the run stops, and
+  the listed human reverts the merge by injection (b)'s route.
 
 A pull request that merges is never "fixed" by a second write: the record
 says `unexpected`, and the listed human reverts it (for the class's files by

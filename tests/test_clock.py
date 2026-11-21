@@ -4,9 +4,11 @@ The tests move a made-up time forward; nothing here sleeps or reads the
 real time.
 """
 
+import http.client
 import os
 import shlex
 import unittest
+import urllib.error
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -40,11 +42,17 @@ def dispatched(gh):
     return [(c["path"].split("/")[-2], c["body"]) for c in gh.writes("POST")]
 
 
-def fake_gh(refuse=()):
+def fake_gh(refuse=(), lose=None):
+    """`refuse`: workflows GitHub answers 422 for. `lose`: a workflow name to
+    a list of exceptions, one raised per dispatch until the list is used up
+    (a request that got no answer)."""
     gh = fakes.FakeGitHub()
+    lose = {name: list(errors) for name, errors in (lose or {}).items()}
 
     def handler(m, params, body):
         name = m.group(1)
+        if lose.get(name):
+            raise lose[name].pop(0)
         if name in refuse:
             return ApiError(422, {"message": "Workflow is disabled"}, m.group(0))
         return None
@@ -147,6 +155,28 @@ class RunTest(unittest.TestCase):
         self.run_clock(gh, "2026-11-16T03:22:50Z", 2)
         self.assertEqual([name for name, _ in dispatched(gh)], ["agent.yml", "detector.yml", "clock.yml"])
         self.assertTrue(any(line.startswith("::warning::clock:") and "agent.yml" in line for line in self.lines))
+
+    def test_a_dispatch_that_gets_no_answer_does_not_end_the_clock(self):
+        for lost in (urllib.error.URLError("connection reset"), TimeoutError("timed out"),
+                     http.client.IncompleteRead(b"")):
+            self.lines = []
+            gh = fake_gh(lose={"detector.yml": [lost]})
+            self.run_clock(gh, "2026-11-16T03:03:50Z", 21)
+            # 03:04's request was lost; 03:14, 03:23 and 03:24 are still served, and the clock hands over.
+            self.assertEqual([name for name, _ in dispatched(gh)],
+                             ["detector.yml", "detector.yml", "agent.yml", "detector.yml", "clock.yml"], lost)
+            self.assertEqual(len([line for line in self.lines if line.startswith("::warning::clock:")]), 1, lost)
+
+    def test_a_handover_that_gets_no_answer_is_tried_again(self):
+        gh = fake_gh(lose={"clock.yml": [urllib.error.URLError("connection reset"), http.client.IncompleteRead(b"")]})
+        self.run_clock(gh, "2026-11-16T03:05:00Z", 1)
+        self.assertEqual(len([n for n, _ in dispatched(gh) if n == "clock.yml"]), 3)
+        self.assertTrue(any(line.startswith("clock: handed over") for line in self.lines))
+
+    def test_a_handover_that_never_gets_an_answer_ends_the_run_red(self):
+        gh = fake_gh(lose={"clock.yml": [OSError("network is unreachable")] * clock.HANDOFF_TRIES})
+        with self.assertRaises(clock.ClockError):
+            self.run_clock(gh, "2026-11-16T03:05:00Z", 1)
 
     def test_a_handover_that_keeps_failing_ends_the_run_red(self):
         gh = fake_gh(refuse=("clock.yml",))

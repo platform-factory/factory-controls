@@ -40,6 +40,7 @@ on:
           - c20-apply-human-cleared
           - c20-apply-unrelated-label
           - c20-remove-needs-human
+          - c20-merge-inconclusive
           - c21-push-main
           - c21-workflow-push
           - c21-workflow-contents-api

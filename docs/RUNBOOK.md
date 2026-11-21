@@ -362,12 +362,22 @@ fallback it is two recorded edits, and their order matters:
 
 ```sh
 T=$(date -u +%Y%m%dT%H%M%SZ); D=<checkout of platform-factory/.github>/rulesets/svc-hello; W=<class-wall id>
+compare() {  # committed file, live read: prints [] when they are equal
+  python3 -c 'import json,sys; from factory import ruleset as rs; print(json.dumps(rs.diff(rs.normalize(json.load(open("rulesets/svc-hello/"+sys.argv[1]))), rs.normalize(json.load(open(sys.argv[2])))), indent=2))' "$1" "$2"
+}
 gh api repos/platform-factory/svc-hello/rulesets/$W > "$D/$T-NN-before-l1-switch-on-wall.json"
 gh api repos/platform-factory/svc-hello/rulesets/$W/history > "$D/$T-NN-history-before-l1-switch-on-wall.json"
 gh api -X PUT repos/platform-factory/svc-hello/rulesets/$W --input rulesets/svc-hello/wall.json
 T2=$(date -u +%Y%m%dT%H%M%SZ)
 gh api repos/platform-factory/svc-hello/rulesets/$W > "$D/$T2-NN-after-l1-switch-on-wall.json"
 gh api repos/platform-factory/svc-hello/rulesets/$W/history > "$D/$T2-NN-history-l1-switch-on-wall.json"
+compare wall.json "$D/$T2-NN-after-l1-switch-on-wall.json"
+```
+
+Stop here unless that comparison printed `[]`. Nothing in the block checks
+it for you: `compare` prints and goes on. Then the second edit:
+
+```sh
 T3=$(date -u +%Y%m%dT%H%M%SZ)
 gh api repos/platform-factory/svc-hello/rulesets/20204893 > "$D/$T3-NN-before-l1-switch-on.json"
 gh api repos/platform-factory/svc-hello/rulesets/20204893/history > "$D/$T3-NN-history-before-l1-switch-on.json"
@@ -375,23 +385,67 @@ gh api -X PUT repos/platform-factory/svc-hello/rulesets/20204893 --input ruleset
 T4=$(date -u +%Y%m%dT%H%M%SZ)
 gh api repos/platform-factory/svc-hello/rulesets/20204893 > "$D/$T4-NN-after-l1-switch-on.json"
 gh api repos/platform-factory/svc-hello/rulesets/20204893/history > "$D/$T4-NN-history-l1-switch-on.json"
-for pair in "wall.json $D/$T2-NN-after-l1-switch-on-wall.json" "l1.json $D/$T4-NN-after-l1-switch-on.json"; do
-  set -- $pair
-  python3 -c 'import json,sys; from factory import ruleset as rs; print(json.dumps(rs.diff(rs.normalize(json.load(open("rulesets/svc-hello/"+sys.argv[1]))), rs.normalize(json.load(open(sys.argv[2])))), indent=2))' "$1" "$2"
-done
+compare l1.json "$D/$T4-NN-after-l1-switch-on.json"             # must print []
 gh api repos/platform-factory/svc-hello/rulesets --jq '[.[] | {id, name, enforcement}]'
 ```
 
-Expected: both comparisons print `[]`; the listing holds exactly
-`main-protection` and `class-wall`, both active; each history shows one new
-version. The delegate commits the eight files to `platform-factory/.github`.
-The scorecard's switch-on time is the `-after-l1-switch-on.json` file's,
-when both edits are in force.
+(`NN` is the next step number in that directory, one for each of the four
+before and after reads.) Expected: both comparisons print `[]`; the listing
+holds exactly `main-protection` and `class-wall`, both active; each history
+shows one new version. The delegate commits the eight files to
+`platform-factory/.github`. The scorecard's switch-on time is the
+`-after-l1-switch-on.json` file's, when both edits are in force; exactly one
+file may carry that ending.
+
+If the first comparison does not print `[]`, stop there: `main-protection`
+is not touched, and the state with the wall on and `main-protection` in its
+earlier form is stricter than before and safe to leave. A live ruleset that
+is stricter than its committed JSON is left for the owner; the delegate
+sends no second `PUT` to change it. Until both comparisons print `[]`, the
+owner is not asked to install the Apps (step 8): the detector's first run
+with the ratchet App's token would record the difference as a ruleset
+difference, with a ledger entry and an issue.
+
+### The label definitions (the delegate; not a human step)
+
+Before step 8, the five labels of the class file's `labels` that
+`svc-hello` does not have yet are created there, with GitHub's default
+colour: `reviewing`, `human-cleared`, `escape:revert`, `seeded`, `fixture`
+(`needs-human` exists from class-scope's first use of it).
+
+```sh
+gh api repos/platform-factory/svc-hello/labels --paginate --jq '[.[].name]' > "$EVIDENCE/<NN>-labels-before.json"
+for l in reviewing human-cleared escape:revert seeded fixture; do
+  gh label create "$l" --repo platform-factory/svc-hello --color ededed || true   # refused if it exists
+done
+gh api repos/platform-factory/svc-hello/labels --paginate --jq '[.[].name]' > "$EVIDENCE/<NN>-labels-after.json"
+```
+
+This was done on 2026-11-21, before the switch-on. Why: GitHub creates a
+label that does not exist when it is first applied through the API, so
+without this the first `human-cleared` on `svc-hello` would be made by the
+agent App (the fixture `c20-apply-human-cleared`), and the listed human
+would find no `reviewing` to tick on queue item 1. Making a definition
+applies no label to anything. Nothing reads definitions: a label counts
+from its events and their actor.
 
 ### 8. Install both Apps on `svc-hello` after the L1 switch-on is recorded (owner)
 
 Only after both switch-on edits' before, after and history files are
-committed in `platform-factory/.github`. Install each App with **Only select
+committed in `platform-factory/.github`, and after the delegate's own dry
+run of the detector (`--dry-run` sends reads only; the token is the owner
+login's) shows the rulesets as the committed ones:
+
+```sh
+SVC_TOKEN="$(gh auth token)" CONTROLS_TOKEN="$(gh auth token)" python3 -m factory.detector --dry-run > "$EVIDENCE/24-detector-dryrun-owner-token.json"
+```
+
+Expected: `ruleset.ok` true, `acted` empty, and one write it would have
+made, the heartbeat. This stands in for a dry run with the ratchet App's
+token, which cannot be made (its key is nowhere but the `ratchet`
+environment, and `detector.yml` has no dry-run input).
+
+Install each App with **Only select
 repositories** → `svc-hello` (`apps/README.md`, step 5). Then confirm that no
 organisation secret or variable reaches `svc-hello` and re-read the `claude`
 installation:
@@ -407,7 +461,18 @@ gh api "user/installations/<claude installation id>/repositories" --paginate --j
 
 Expected: both counts `0`; the `claude` list holds neither `svc-hello` nor
 the controls repo; each M4 App's installation lists `svc-hello` (and the
-agent App `m4-probe`) only.
+agent App `m4-probe`) only. The repository lists need a token with
+`read:user`, or the installation's **Repository access** page in the browser.
+
+The first detector run after the installation is the first run with the
+ratchet App's token, and a real one. The delegate reads it before anything
+else: it must be green and write `detector/heartbeat.json` on the records
+branch, which shows that the token's reads of `svc-hello`'s branch and
+`go.mod` pass (the ratchet App holds no `contents` permission; a daily
+scorecard run makes the same reads with a token that holds none on
+`svc-hello` either). A 403 there stops everything before the fixtures:
+`contents: read` is then added to the ratchet App's manifest and
+installation by the owner, with a dated correction in the register.
 
 The ratchet App's ruleset write is first exercised for real at C-18's
 injection (a): at L1 the ratchet has nothing to raise, so no earlier run
@@ -454,7 +519,10 @@ inconclusive (a fail is never reviewed; the merge step closes it):
 5. Approve submits it as an **Approve** review. A close submits it as a
    **Comment** review, then **Close pull request**. If the pull request was a
    seed, the opening job records it and labels it `seeded` afterwards; you
-   need not know which it was.
+   need not know which it was. Do not read `seeds/*.json` on the records
+   branch or the comment the opening job leaves when it closes a seed: both
+   name the seed's type and position, and each one read makes the seeds
+   still to come easier to tell.
 
 Proof (the scorecard reads exactly these):
 
@@ -488,8 +556,12 @@ lacks your approval, because asking for real items only would tell a seed
 from a real item. Once 19 queue items have merged no seed can open. On the
 first queue-item pull request opened after the 19th merge, wait until one
 agent run (minutes 23 and 53) has passed with the checks green before you
-approve. The merge step then asks, GitHub refuses, and the refusal is
-recorded with `reviewDecision` and `mergeStateStatus`. If that sitting is
+start: apply `reviewing` only after the delegate says the refusal is
+recorded, or the wait is counted in that pull request's review minutes
+(C-16). The merge step then asks, GitHub refuses, and the refusal is
+recorded with `reviewDecision` and `mergeStateStatus`: the delegate reads
+`merge-step/<run>-<attempt>-merge.json` on the records branch (`result`
+`refused`, status 405). If that sitting is
 missed, the pull request open at the first freeze gives the same record
 (the L2 programme).
 
@@ -509,8 +581,14 @@ carries `needs-human`: apply `human-cleared`. The label event re-runs
 the pull request is then reviewed as in step 9. A label counts only for the
 head it was applied to: after a push, apply it again.
 
-For C-20's L1 case, wait until the delegate says the fixtures workflow has
-made its three label attempts (`c20-*`), then clear. Proof: the events read
+For C-20's L1 case, queue item 1, there are two waits, and no label goes on
+the pull request while a fixture is running. First, wait until the delegate
+says the fixtures workflow has made its attempts on the forced inconclusive
+(the three label attempts and the merge attempt, `c20-*`, and three of
+C-21's), then clear. Second, after clearing, wait again before `reviewing`
+and the review: the delegate runs one more fixture while your label is in
+force and the variable is still set (`c21-remove-human-cleared`), then
+deletes the variable and says so. Proof: the events read
 of step 9 shows `human-cleared` by `<listed-human-login>` with no `app`, and
 the next `class-scope` run's job summary shows "cleared".
 
@@ -583,8 +661,27 @@ re-opened by the agent and waits for your approval at L1 (step 9).
 ### 15. Any human pull request on `svc-hello` after the wall is on (listed human)
 
 A person's pull request that changes neither class file needs the wall
-entry's approval and passes `class-scope` only with `human-cleared`: apply
-`human-cleared`, approve, and the author merges. A person's pull request that
+entry's approval and passes `class-scope` only with `human-cleared`. With
+strict checks and a label that counts only for the head it was applied to,
+the order matters:
+
+1. The author is not the listed human. GitHub does not count an author's
+   own approval, and `platform` has no other member, so a pull request the
+   listed human opens on a wall path can only merge by a lift. The delegate
+   opens it under the owner login.
+2. Just after an agent run (minutes 23 and 53) has finished, the author
+   brings the branch up to date with `main` and waits for `go-test` on that
+   head. A head behind `main` fails `class-scope`, and an update removes
+   `human-cleared`.
+3. The listed human applies `human-cleared` on that head, `class-scope`
+   passes on the label's event, and the listed human approves.
+4. The author squash-merges before the next agent run moves `main`. If it
+   does move, repeat from 2.
+
+A merged pull request that touches `.github/workflows/validate.yml`,
+`.github/workflows/class-scope.yml`, `.github/class-scope/**` or a
+`*_test.go` file resets the streak, whatever it changes (the note's
+correction 3). A person's pull request that
 changes `go.mod` or `go.sum` other than as the queue's next item does not
 pass `class-scope`; it needs a lift (step 16) and is a fault to record.
 

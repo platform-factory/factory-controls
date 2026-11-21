@@ -39,6 +39,7 @@ job is written to be run at any time.
 from __future__ import annotations
 
 import argparse
+import http.client
 import os
 import sys
 import time
@@ -51,6 +52,11 @@ from .gh import ApiError, GitHub
 
 ROOT = Path(__file__).resolve().parent.parent
 SELF = "clock.yml"
+# What a dispatch can fail with and the clock must outlive: GitHub's refusal,
+# and a request that never got an answer (a reset connection, a DNS failure,
+# a timeout, a reply cut short). The client sends no POST a second time
+# when the first got no answer.
+DISPATCH_ERRORS = (ApiError, OSError, http.client.HTTPException)
 STEP_SECONDS = 20          # how often the job looks at the time
 HANDOFF_MAX_AGE = 15 * 60  # an older `since` is ignored: the chain was broken, not handed over
 HANDOFF_TRIES = 5
@@ -145,10 +151,17 @@ def run(gh, repo: str, ref: str, targets: dict[str, list], *, since: str | None,
         log: Callable[[str], None] = print) -> datetime:
     """Keep the time for run_seconds, then hand over. Returns the time reached.
 
-    A dispatch that GitHub refuses (a disabled workflow answers 4xx) is
-    logged and the clock goes on: one workflow that cannot start must not
-    stop the others. A handover that fails after five tries raises, so the
-    run ends red and is seen.
+    A dispatch that GitHub refuses (a disabled workflow answers 4xx), or
+    that gets no answer at all, is logged and the clock goes on: one
+    workflow that cannot start, or one lost request, must not stop the
+    others or end the clock. That minute is not sent again; the next one
+    the cron line names is. A handover that fails after five tries, for
+    either reason, raises, so the run ends red and is seen. A handover
+    whose request GitHub did accept but whose answer was lost is sent
+    again. The `clock` concurrency group keeps one run waiting, so the
+    earlier of the two is cancelled before it starts and the later one is
+    the successor: a cancelled clock run that never started, next to one
+    that did, needs no restart by hand.
     """
     started = now()
     last = start_from(since, started)
@@ -165,8 +178,8 @@ def run(gh, repo: str, ref: str, targets: dict[str, list], *, since: str | None,
             try:
                 dispatch(gh, repo, name, ref)
                 log(f"clock: {iso(t)} dispatched {name} for {', '.join(m.strftime('%H:%M') for m in minutes)}")
-            except ApiError as e:
-                log(f"::warning::clock: {iso(t)} could not dispatch {name}: {e}")
+            except DISPATCH_ERRORS as e:
+                log(f"::warning::clock: {iso(t)} could not dispatch {name}: {e!r}")
         last = t
         if t >= end:
             break
@@ -179,8 +192,8 @@ def run(gh, repo: str, ref: str, targets: dict[str, list], *, since: str | None,
             dispatch(gh, repo, SELF, ref, {"since": iso(last)})
             log(f"clock: handed over at {iso(last)}")
             return last
-        except ApiError as e:
-            log(f"::warning::clock: handover try {attempt} failed: {e}")
+        except DISPATCH_ERRORS as e:
+            log(f"::warning::clock: handover try {attempt} failed: {e!r}")
             if attempt < HANDOFF_TRIES:
                 sleep(30)
     raise ClockError("the clock could not start its next run; dispatch clock.yml by hand")

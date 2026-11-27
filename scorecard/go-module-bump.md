@@ -1,6 +1,6 @@
 # Scorecard: go-module-bump on platform-factory/svc-hello
 
-Inputs SHA-256 `2e22020c5796093e373b2be9cc6e3fe32c6f1ddc7864ddf3ad3000b35078892a`; class file commit `de36a84ce36e50fbb197e41fa24bc1794fc81b5c`; main `cb6e4affd687258391311880afc54e7229151ee2`; latest event 2026-11-16T03:14:14Z.
+Inputs SHA-256 `022cdd60bc8aa8f28ed7386908771b018cada915c4bc399dd4cc6f39215c6fa8`; class file commit `de36a84ce36e50fbb197e41fa24bc1794fc81b5c`; main `cb6e4affd687258391311880afc54e7229151ee2`; latest event 2026-11-16T03:14:14Z.
 
 Computed from GitHub's record, the records branch and the class file. Rows for pull requests still open are withheld until they close or merge.
 
